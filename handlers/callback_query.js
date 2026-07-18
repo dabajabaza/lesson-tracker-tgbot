@@ -21,7 +21,7 @@ import {
   exportKeyboard,
   sortMenuKeyboard,
 } from 'lib/keyboards';
-import { describeOperation, formatDateTime } from 'lib/render';
+import { describeOperation, formatDateTime, OP_LABELS } from 'lib/render';
 import { formatMoney, toRubles } from 'lib/money';
 import { toCsv, chunkText } from 'lib/csv';
 
@@ -43,6 +43,20 @@ export default async function (query) {
     return;
   }
 
+  try {
+    await route(query, uid, chatId, messageId, answer);
+  } catch (e) {
+    // Любая необработанная ошибка не должна оставлять кнопку «крутиться».
+    console.error('callback_query:', e);
+    try {
+      await answer('⚠️ Не получилось выполнить действие. Попробуйте ещё раз.', true);
+    } catch (e2) {
+      // answerCallbackQuery мог быть уже вызван или query устарел — не важно.
+    }
+  }
+}
+
+async function route(query, uid, chatId, messageId, answer) {
   // Telegram отвечает 400 «message is not modified» при повторном нажатии — игнорируем.
   const edit = async (view) => {
     try {
@@ -63,13 +77,17 @@ export default async function (query) {
   const id = a1 ? parseInt(a1, 10) : null;
   const page = a2 ? parseInt(a2, 10) || 0 : 0;
 
+  // Любое нажатие кнопки прерывает незавершённый текстовый ввод — иначе
+  // «Введите сумму» для ученика A переживёт переход к ученику B, и ввод
+  // уйдёт не туда. Команды pay/price/add/search ставят своё состояние ниже.
+  if (cmd !== 'noop') await clearSession(chatId);
+
   switch (cmd) {
     case 'noop':
       await answer();
       return;
 
     case 'home':
-      await clearSession(chatId);
       await edit(await mainMenuView(uid));
       await answer();
       return;
@@ -80,7 +98,6 @@ export default async function (query) {
       return;
 
     case 'card':
-      await clearSession(chatId);
       await edit(await cardView(uid, id));
       await answer();
       return;
@@ -165,7 +182,6 @@ export default async function (query) {
       return;
 
     case 'cancel':
-      await clearSession(chatId);
       await edit(await mainMenuView(uid));
       await answer('Отменено');
       return;
@@ -179,20 +195,25 @@ export default async function (query) {
       const s = await getStudent(uid, op.studentId);
       await edit({
         text: `↩️ Отменить последнее действие?\n\n${describeOperation(op, s?.name || '?')}`,
-        reply_markup: undoConfirmKeyboard(),
+        reply_markup: undoConfirmKeyboard(op.id),
       });
       await answer();
       return;
     }
 
     case 'undo_yes': {
-      const op = await undoLastOperation(uid);
-      if (!op) {
+      const res = await undoLastOperation(uid, id);
+      if (res.status === 'empty') {
         await edit(await mainMenuView(uid));
         await answer('Отменять нечего', true);
         return;
       }
-      await edit(await cardView(uid, op.studentId));
+      if (res.status === 'stale') {
+        await edit(await mainMenuView(uid));
+        await answer('⚠️ Появились новые операции — отмена не выполнена. Откройте «Отменить действие» ещё раз.', true);
+        return;
+      }
+      await edit(await cardView(uid, res.op.studentId));
       await answer('✅ Действие отменено');
       return;
     }
@@ -262,13 +283,6 @@ async function sendStudentsCsv(uid, chatId) {
   await sendChunks(chatId, '👥 Ученики (CSV, разделитель «;») — скопируйте в файл .csv:', toCsv(rows));
 }
 
-const TYPE_LABELS = {
-  payment: 'Оплата',
-  charge: 'Списание урока',
-  refund: 'Возврат урока',
-  price_change: 'Изменение стоимости',
-};
-
 // Экспорт истории операций (п.17–18 ТЗ).
 async function sendHistoryCsv(uid, chatId) {
   const ops = await getAllOperations(uid);
@@ -285,7 +299,7 @@ async function sendHistoryCsv(uid, chatId) {
       formatDateTime(op.createdAt),
       op.studentId,
       names.get(op.studentId) || op.snapshotBefore?.name || '',
-      TYPE_LABELS[op.type] || op.type,
+      OP_LABELS[op.type] || op.type,
       op.amount != null ? toRubles(op.amount) : '',
       op.lessonsDelta || 0,
       op.balanceAfter,
