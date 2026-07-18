@@ -5,7 +5,7 @@
 
 import { api } from 'sdk';
 import { getSession, setSession, clearSession } from 'lib/session';
-import { parseMoney, formatMoney } from 'lib/money';
+import { parseMoneyStrict, formatMoney, MAX_MONEY } from 'lib/money';
 import {
   applyPayment,
   createStudent,
@@ -86,13 +86,24 @@ async function askAgain(chatId, text) {
   await api.sendMessage({ chat_id: chatId, text, reply_markup: cancelKeyboard() });
 }
 
+// Понятное объяснение, почему сумма/стоимость не принята.
+function moneyErrorText(error, kind, example) {
+  const noun = kind === 'price' ? 'Стоимость' : 'Сумма';
+  const acc = kind === 'price' ? 'стоимость' : 'сумму';
+  if (error === 'range')
+    return `⚠️ Слишком большая ${noun.toLowerCase()} — максимум ${formatMoney(MAX_MONEY)}. Введите ${acc} поменьше:`;
+  if (error === 'zero') return `⚠️ ${noun} должна быть больше нуля. Введите число, например: ${example}`;
+  return `⚠️ Это не похоже на ${acc}. Введите число в рублях, например: ${example}`;
+}
+
 // Внесение оплаты (п.6–7 ТЗ).
 async function onPaymentAmount(uid, chatId, text, payload) {
-  const amount = parseMoney(text);
-  if (amount === null || amount <= 0) {
-    await askAgain(chatId, '⚠️ Не удалось распознать сумму. Введите число, например: 1600');
+  const parsed = parseMoneyStrict(text);
+  if (parsed.error) {
+    await askAgain(chatId, moneyErrorText(parsed.error, 'amount', '1600'));
     return;
   }
+  const amount = parsed.value;
   const res = await applyPayment(uid, payload.studentId, amount);
   await clearSession(chatId);
   if (!res) {
@@ -134,12 +145,12 @@ async function onNewName(uid, chatId, text, payload) {
 
 // Добавление ученика, шаг 2: стоимость занятия.
 async function onNewPrice(uid, chatId, text, payload) {
-  const price = parseMoney(text);
-  if (price === null || price <= 0) {
-    await askAgain(chatId, '⚠️ Не удалось распознать стоимость. Введите число, например: 1600');
+  const parsed = parseMoneyStrict(text);
+  if (parsed.error) {
+    await askAgain(chatId, moneyErrorText(parsed.error, 'price', '1600'));
     return;
   }
-  const student = await createStudent(uid, payload.name, price);
+  const student = await createStudent(uid, payload.name, parsed.value);
   if (!student) {
     await setSession(chatId, 'await_new_name', { msgId: payload.msgId });
     await askAgain(chatId, `⚠️ Имя «${payload.name}» уже занято. Введите другое имя:`);
@@ -156,11 +167,12 @@ async function onNewPrice(uid, chatId, text, payload) {
 
 // Изменение стоимости (п.12 ТЗ): только будущие оплаты, история не пересчитывается.
 async function onPriceChange(uid, chatId, text, payload) {
-  const price = parseMoney(text);
-  if (price === null || price <= 0) {
-    await askAgain(chatId, '⚠️ Не удалось распознать стоимость. Введите число, например: 1800');
+  const parsed = parseMoneyStrict(text);
+  if (parsed.error) {
+    await askAgain(chatId, moneyErrorText(parsed.error, 'price', '1800'));
     return;
   }
+  const price = parsed.value;
   const s = await changePrice(uid, payload.studentId, price);
   await clearSession(chatId);
   if (!s) {

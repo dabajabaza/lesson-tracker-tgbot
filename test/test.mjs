@@ -44,6 +44,9 @@ check('parseMoney "1 600,50"', parseMoney('1 600,50') === 160050);
 check('parseMoney "1600.5"', parseMoney('1600.5') === 160050);
 check('parseMoney abc → null', parseMoney('abc') === null);
 check('parseMoney "12,345" → null', parseMoney('12,345') === null);
+check('parseMoney: гигантское число → null', parseMoney('1000000000000000000000000000') === null);
+check('parseMoney: больше лимита 10 млн → null', parseMoney('10000001') === null);
+check('parseMoney: ровно 10 млн проходит', parseMoney('10000000') === 1000000000);
 check('formatMoney 160000', formatMoney(160000) === '1 600 ₽');
 check('formatMoney 160050', formatMoney(160050) === '1 600,50 ₽');
 
@@ -156,10 +159,20 @@ check('ответ: 0 занятий', /Добавлено: 0 занятий/.tes
 // --- некорректный ввод ---
 await cb('pay:1');
 await msg('пятьсот');
-check('нечисловая сумма переспрашивается', /Не удалось распознать сумму/.test(last('sendMessage').params.text));
+check('нечисловая сумма: понятное сообщение', /не похоже на сумму/.test(last('sendMessage').params.text), last('sendMessage').params.text);
 await msg('0');
-check('ноль отклоняется', /Не удалось распознать сумму/.test(last('sendMessage').params.text));
+check('ноль отклоняется с объяснением', /Сумма должна быть больше нуля/.test(last('sendMessage').params.text), last('sendMessage').params.text);
+await msg('1000000000000000000000000000');
+check('гигантская сумма: сообщение о лимите', /Слишком большая сумма — максимум 10 000 000 ₽/.test(last('sendMessage').params.text), last('sendMessage').params.text);
 await cb('cancel');
+
+// --- лимит стоимости при добавлении ученика ---
+await cb('add');
+await msg('Тестовый Лимит');
+await msg('100000000000');
+check('гигантская стоимость: сообщение о лимите', /Слишком большая стоимость — максимум 10 000 000 ₽/.test(last('sendMessage').params.text), last('sendMessage').params.text);
+await cb('cancel');
+check('ученик с гигантской ценой не создан', !students().some((s) => s.name === 'Тестовый Лимит'));
 
 // --- поиск (п.14) ---
 await cb('search');
