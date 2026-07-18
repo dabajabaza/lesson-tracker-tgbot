@@ -1,0 +1,15 @@
+{
+  "name": "lesson-tracker-bot",
+  "private": true,
+  "type": "module",
+  "description": "LessonTracker42Bot — Telegram-бот учёта оплат учеников (Telegram Serverless)",
+  "scripts": {
+    "deploy": "tgcloud push",
+    "status": "tgcloud status",
+    "run": "tgcloud run",
+    "local": "node local/run.mjs"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "^0.1.2"
+  }
+}
