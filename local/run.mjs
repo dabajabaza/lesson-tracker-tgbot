@@ -5,6 +5,11 @@ import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import dns from 'node:dns';
+
+// В этой сети IPv6-маршрут до api.telegram.org периодически умирает,
+// а fetch не откатывается на IPv4 сам (в отличие от curl) — закрепляем IPv4.
+dns.setDefaultResultOrder('ipv4first');
 
 register('./loader.mjs', import.meta.url);
 
@@ -37,7 +42,8 @@ async function main() {
     } catch (e) {
       errors++;
       const wait = Math.min(30000, 1000 * 2 ** errors);
-      console.error(`getUpdates: ${e.message}; повтор через ${wait / 1000}с`);
+      const cause = e.cause?.code || e.cause?.message || '';
+      console.error(`getUpdates: ${e.message}${cause ? ` (${cause})` : ''}; повтор через ${wait / 1000}с`);
       await sleep(wait);
       continue;
     }
