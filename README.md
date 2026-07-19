@@ -49,6 +49,14 @@ lib/session.js, lib/guard.js — FSM-состояния и проверка вл
 npm run local
 ```
 
+Если прямой доступ к api.telegram.org заблокирован провайдером (fetch падает
+с UND_ERR_CONNECT_TIMEOUT, а этой сети это свойственно) — запускать через
+локальный прокси:
+
+```bash
+NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:1080 npm run local
+```
+
 База — `local/data.sqlite`. Токен ищется в `BOT_TOKEN` или файле `.bot-token`
 (оба в .gitignore).
 
