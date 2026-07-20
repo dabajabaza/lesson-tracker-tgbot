@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Operation, Student, now_ts
+from .models import Operation, Student, UiPref, now_ts
 
 
 async def get_student(session: AsyncSession, owner_id: int, sid: int) -> Student | None:
@@ -48,16 +48,19 @@ async def find_by_name_lower(session: AsyncSession, owner_id: int, name: str) ->
 async def create_student(
     session: AsyncSession, owner_id: int, name: str, price: int
 ) -> Student | None:
-    """Создаёт ученика; None, если имя у этого владельца занято (без учёта регистра)."""
-    clean = name.strip()
+    """Создаёт ученика; None, если имя пустое или у этого владельца занято
+    (без учёта регистра). Коммитит до возврата."""
+    clean = (name or "").strip()
+    if not clean:
+        return None
     if await find_by_name_lower(session, owner_id, clean):
         return None
     s = Student(owner_id=owner_id, name=clean, name_lower=clean.lower(), price=price)
     session.add(s)
     try:
-        await session.flush()
+        await session.commit()
     except IntegrityError:
-        await session.rollback()
+        await session.rollback()  # гонка на UniqueConstraint(owner_id, name_lower)
         return None
     return s
 
@@ -107,6 +110,7 @@ async def apply_payment(
     s.last_payment_at = now_ts()
     s.last_payment_amount = amount
     s.last_payment_lessons = lessons
+    await session.commit()  # фиксируем ДО отправки ответа в Telegram
     return PaymentResult(s, lessons, remainder, prev_remainder)
 
 
@@ -125,6 +129,7 @@ async def _shift_balance(
         remainder_after=s.remainder,
     )
     s.balance += delta
+    await session.commit()
     return s
 
 
@@ -151,6 +156,7 @@ async def change_price(session, owner_id, sid, new_price) -> Student | None:
         new_price=new_price,
     )
     s.price = new_price
+    await session.commit()
     return s
 
 
@@ -184,6 +190,7 @@ async def undo_last_operation(
     if s:
         s.restore(op.snapshot_before)
     op.undone = True
+    await session.commit()
     return UndoResult("done", op)
 
 
@@ -213,3 +220,20 @@ async def get_all_operations(session, owner_id) -> list[Operation]:
             select(Operation).where(Operation.owner_id == owner_id).order_by(Operation.id)
         )
     )
+
+
+# ---------- настройки отображения списка (п.15 ТЗ) ----------
+
+async def get_view_pref(session: AsyncSession, owner_id: int) -> tuple[str, int]:
+    p = await session.get(UiPref, owner_id)
+    return (p.sort, p.page) if p else ("name", 0)
+
+
+async def set_view_pref(session: AsyncSession, owner_id: int, sort: str, page: int) -> None:
+    p = await session.get(UiPref, owner_id)
+    if p is None:
+        session.add(UiPref(owner_id=owner_id, sort=sort, page=page))
+    else:
+        p.sort = sort
+        p.page = page
+    await session.commit()

@@ -1,18 +1,34 @@
 """Подключение к БД. По умолчанию SQLite (aiosqlite); URL можно указать любой,
 поддерживаемый SQLAlchemy async — в т.ч. PostgreSQL (asyncpg) при переезде (п.19 ТЗ)."""
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from .models import Base
 
 
-def make_sessionmaker(db_url: str) -> async_sessionmaker[AsyncSession]:
+def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     engine = create_async_engine(db_url, echo=False)
-    return async_sessionmaker(engine, expire_on_commit=False)
+    if db_url.startswith("sqlite"):
+        # WAL + busy_timeout: устойчивость к «database is locked» при параллельных
+        # апдейтах и записи FSM-состояния из отдельных соединений.
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.close()
+
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    return engine, sessionmaker
 
 
-async def init_models(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+async def init_models(engine: AsyncEngine) -> None:
     """Создаёт таблицы, которых ещё нет (простая авто-миграция для SQLite)."""
-    engine = sessionmaker.kw["bind"]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

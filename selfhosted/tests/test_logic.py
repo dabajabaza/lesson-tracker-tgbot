@@ -1,33 +1,13 @@
-"""Тесты бизнес-логики и чистых функций на настоящем SQLite (in-memory)."""
-
-import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+"""Тесты бизнес-логики и чистых функций на настоящем SQLite (in-memory).
+Фикстуры session/sessionmaker/engine — в conftest.py."""
 
 from bot import repo
 from bot.csv_export import to_csv
 from bot.export_data import history_rows, students_rows
-from bot.models import Base
 from bot.money import MAX_MONEY, format_money, parse_money, parse_money_strict, to_rubles
 from bot.render import lessons_word, render_operation, status_emoji
 
 A, B = 111, 222  # owner id двух разных пользователей
-
-
-@pytest_asyncio.fixture
-async def session():
-    engine = create_async_engine(
-        "sqlite+aiosqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
-        yield s
-    await engine.dispose()
 
 
 # ---------- чистые функции ----------
@@ -62,6 +42,11 @@ def test_status_and_plural():
 def test_csv_formula_injection():
     assert to_csv([["=1+1", "-1", "+7 999"]]) == "'=1+1;-1;'+7 999"
     assert to_csv([["a;b", 'c"d']]) == '"a;b";"c""d"'
+
+
+def test_csv_escapes_carriage_return():
+    # одиночный \r внутри значения не должен ломать структуру CSV
+    assert to_csv([["a\rb", "c"]]) == '"a\rb";c'
 
 
 # ---------- бизнес-логика ----------

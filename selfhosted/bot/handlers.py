@@ -4,7 +4,7 @@ import re
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -36,6 +36,20 @@ router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 # ---------- утилиты ----------
 
+def _as_int(value) -> int | None:
+    """Безопасный разбор аргумента callback_data (его может подделать клиент)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _menu(session: AsyncSession, owner_id: int):
+    """Главное меню с учётом сохранённой сортировки/страницы пользователя."""
+    sort, page = await repo.get_view_pref(session, owner_id)
+    return await main_menu_view(session, owner_id, sort, page)
+
+
 def _money_error(kind: str, error: str, example: str) -> str:
     noun = "Стоимость" if kind == "price" else "Сумма"
     acc = "стоимость" if kind == "price" else "сумму"
@@ -51,8 +65,8 @@ async def _delete_quietly(bot, chat_id: int, message_id: int | None) -> None:
         return
     try:
         await bot.delete_message(chat_id, message_id)
-    except TelegramBadRequest:
-        pass  # сообщение уже удалено — не критично
+    except TelegramAPIError:
+        pass  # удаление косметическое: сообщение уже удалено / сеть — не критично
 
 
 # ---------- команды и текстовый ввод (FSM) ----------
@@ -60,7 +74,7 @@ async def _delete_quietly(bot, chat_id: int, message_id: int | None) -> None:
 @router.message(Command("start", "menu"))
 async def on_start(message: Message, session: AsyncSession, state: FSMContext) -> None:
     await state.clear()
-    text, kb = await main_menu_view(session, message.from_user.id)
+    text, kb = await _menu(session, message.from_user.id)
     await message.answer(text, reply_markup=kb)
 
 
@@ -77,11 +91,11 @@ async def on_payment_amount(message: Message, session: AsyncSession, state: FSMC
     data = await state.get_data()
     res = await repo.apply_payment(session, message.from_user.id, data.get("student_id"), parsed.value)
     await state.clear()
+    await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     if not res:
-        text, kb = await main_menu_view(session, message.from_user.id)
+        text, kb = await _menu(session, message.from_user.id)
         await message.answer(text, reply_markup=kb)
         return
-    await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     lines = [f"✅ Оплата {format_money(parsed.value)} внесена."]
     if res.prev_remainder > 0:
         lines.append(f"Учтён прежний остаток: {format_money(res.prev_remainder)}.")
@@ -148,11 +162,11 @@ async def on_price_change(message: Message, session: AsyncSession, state: FSMCon
     data = await state.get_data()
     s = await repo.change_price(session, message.from_user.id, data.get("student_id"), parsed.value)
     await state.clear()
+    await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     if not s:
-        text, kb = await main_menu_view(session, message.from_user.id)
+        text, kb = await _menu(session, message.from_user.id)
         await message.answer(text, reply_markup=kb)
         return
-    await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     await message.answer(
         f"✅ Стоимость изменена: {format_money(parsed.value)}.\n"
         f"Применяется только к будущим оплатам.\n\n{render_card(s)}",
@@ -177,7 +191,7 @@ async def on_search(message: Message, session: AsyncSession, state: FSMContext) 
 @router.message(StateFilter(None))
 async def on_any_message(message: Message, session: AsyncSession) -> None:
     # Вне диалога любое сообщение показывает главное меню.
-    text, kb = await main_menu_view(session, message.from_user.id)
+    text, kb = await _menu(session, message.from_user.id)
     await message.answer(text, reply_markup=kb)
 
 
@@ -209,27 +223,37 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
                 return  # повторное нажатие — ничего не поменялось
             raise
 
+    # id ученика из callback_data — валидируем (клиент может прислать «card:abc»).
+    sid_cmds = {"card", "pay", "charge", "refund", "price", "hist"}
+    sid = _as_int(a1) if cmd in sid_cmds else None
+    if cmd in sid_cmds and sid is None:
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+
     if cmd == "noop":
         await cb.answer()
 
     elif cmd == "home":
-        await edit(*await main_menu_view(session, uid))
+        await edit(*await _menu(session, uid))
         await cb.answer()
 
     elif cmd == "list":
-        await edit(*await main_menu_view(session, uid, a1, int(a2 or 0)))
+        sort = a1 if a1 in ("name", "bal", "due") else "name"
+        page = _as_int(a2) or 0
+        await repo.set_view_pref(session, uid, sort, page)
+        await edit(*await main_menu_view(session, uid, sort, page))
         await cb.answer()
 
     elif cmd == "card":
-        await edit(*await card_view(session, uid, int(a1)))
+        await edit(*await card_view(session, uid, sid))
         await cb.answer()
 
     elif cmd == "hist":
-        await edit(*await history_view(session, uid, int(a1), int(a2 or 0)))
+        await edit(*await history_view(session, uid, sid, _as_int(a2) or 0))
         await cb.answer()
 
     elif cmd == "pay":
-        s = await repo.get_student(session, uid, int(a1))
+        s = await repo.get_student(session, uid, sid)
         if not s:
             await cb.answer("Ученик не найден", show_alert=True)
             return
@@ -243,7 +267,7 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer()
 
     elif cmd == "charge":
-        s = await repo.charge_lesson(session, uid, int(a1))
+        s = await repo.charge_lesson(session, uid, sid)
         if not s:
             await cb.answer("Ученик не найден", show_alert=True)
             return
@@ -254,7 +278,7 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         )
 
     elif cmd == "refund":
-        s = await repo.refund_lesson(session, uid, int(a1))
+        s = await repo.refund_lesson(session, uid, sid)
         if not s:
             await cb.answer("Ученик не найден", show_alert=True)
             return
@@ -262,7 +286,7 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer(f"↩️ Урок возвращён. Осталось: {s.balance}")
 
     elif cmd == "price":
-        s = await repo.get_student(session, uid, int(a1))
+        s = await repo.get_student(session, uid, sid)
         if not s:
             await cb.answer("Ученик не найден", show_alert=True)
             return
@@ -291,7 +315,7 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer()
 
     elif cmd == "cancel":
-        await edit(*await main_menu_view(session, uid))
+        await edit(*await _menu(session, uid))
         await cb.answer("Отменено")
 
     elif cmd == "undo":
@@ -307,13 +331,13 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer()
 
     elif cmd == "undo_yes":
-        res = await repo.undo_last_operation(session, uid, int(a1) if a1 else None)
+        res = await repo.undo_last_operation(session, uid, _as_int(a1))
         if res.status == "empty":
-            await edit(*await main_menu_view(session, uid))
+            await edit(*await _menu(session, uid))
             await cb.answer("Отменять нечего", show_alert=True)
             return
         if res.status == "stale":
-            await edit(*await main_menu_view(session, uid))
+            await edit(*await _menu(session, uid))
             await cb.answer(
                 "⚠️ Появились новые операции — отмена не выполнена. Откройте «Отменить действие» ещё раз.",
                 show_alert=True,
@@ -323,7 +347,7 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer("✅ Действие отменено")
 
     elif cmd == "undo_no":
-        await edit(*await main_menu_view(session, uid))
+        await edit(*await _menu(session, uid))
         await cb.answer()
 
     elif cmd == "export":

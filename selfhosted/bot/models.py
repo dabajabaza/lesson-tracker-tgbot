@@ -78,3 +78,25 @@ class Operation(Base):
         Index("idx_operations_student", "student_id"),
         Index("idx_operations_owner_undone", "owner_id", "undone"),
     )
+
+
+class UiPref(Base):
+    """Настройки отображения списка (сортировка/страница) — чтобы «⬅️ К списку»
+    не сбрасывал выбранную сортировку и позицию (п.15 ТЗ)."""
+
+    __tablename__ = "ui_prefs"
+
+    owner_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    sort: Mapped[str] = mapped_column(String, nullable=False, default="name")
+    page: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class FsmRecord(Base):
+    """Персистентное состояние диалога (FSM). В памяти состояние терялось бы при
+    рестарте сервиса (в т.ч. после сна ноутбука) — незавершённый ввод пропадал."""
+
+    __tablename__ = "fsm"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    state: Mapped[str | None] = mapped_column(String)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
