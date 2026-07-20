@@ -57,7 +57,7 @@ python -m bot
 ```
 
 В этой сети прямой доступ к `api.telegram.org` режется провайдером — запускать через
-локальный прокси:
+локальный прокси (для прокси aiogram требует пакет `aiohttp-socks`, он в requirements):
 
 ```bash
 TELEGRAM_PROXY=http://127.0.0.1:1080 python -m bot
@@ -65,6 +65,19 @@ TELEGRAM_PROXY=http://127.0.0.1:1080 python -m bot
 
 Переменные окружения: `BOT_TOKEN`, `DATABASE_URL`
 (по умолчанию `sqlite+aiosqlite:///selfhosted/data.sqlite`), `TELEGRAM_PROXY`.
+
+Вторую копию запустить нельзя: при старте бот берёт эксклюзивный лок (абстрактный
+unix-сокет) и вторая копия сразу завершается с ошибкой — защита от конфликта
+getUpdates (Telegram 409) и параллельной записи в БД.
+
+### Перенос данных из serverless
+
+Разовый скрипт `migrate_from_serverless.py` копирует учеников и историю из
+`../serverless/local/data.sqlite` (выполнен при переезде 2026-07-21):
+
+```bash
+python migrate_from_serverless.py
+```
 
 > ⚠️ Одновременно может работать только **один** экземпляр бота (serverless **или**
 > self-hosted) — иначе Telegram отдаёт 409 на getUpdates. Перед запуском этой версии

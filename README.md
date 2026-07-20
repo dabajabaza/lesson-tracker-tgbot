@@ -6,10 +6,10 @@ Telegram-бот учёта оплат учеников преподавател�
 
 Монорепо с двумя реализациями одного бота (@LessonTracker42Bot):
 
-| Каталог         | Стек                              | Назначение |
-|-----------------|-----------------------------------|------------|
-| [`serverless/`](serverless/) | JavaScript, Telegram Serverless | Текущая рабочая версия. Пока платформа в закрытой бете — запускается локально (Node + встроенная SQLite, long polling). |
-| [`selfhosted/`](selfhosted/) | Python, aiogram 3 + SQLAlchemy  | Порт под self-hosted-деплой (путь на PostgreSQL, экспорт файлами .xlsx/.csv). Цель переезда. |
+| Каталог         | Стек                              | Статус |
+|-----------------|-----------------------------------|--------|
+| [`selfhosted/`](selfhosted/) | Python, aiogram 3 + SQLAlchemy  | **Рабочая версия** (с 2026-07-21). Long polling, systemd-сервис `lesson-tracker-selfhosted`, данные перенесены из serverless. |
+| [`serverless/`](serverless/) | JavaScript, Telegram Serverless | Выведена из эксплуатации (остановлена и отключена). Ждёт открытия беты Telegram Serverless как запасной вариант. |
 
 Обе реализации функционально эквивалентны и мультитенантны (данные каждого
 преподавателя изолированы). Подробности и запуск — в README каждого каталога.

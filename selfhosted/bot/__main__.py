@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import socket
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -14,10 +15,27 @@ from .middlewares import DbSessionMiddleware
 from .storage import SqlAlchemyStorage
 
 _ERROR_TEXT = "⚠️ Не получилось выполнить действие. Попробуйте ещё раз."
+_LOCK_NAME = "lesson-tracker-selfhosted.lock"
+
+
+def _acquire_single_instance_lock() -> socket.socket:
+    """Гард от второй копии: две копии дерутся за getUpdates (Telegram 409) и
+    параллельно пишут в одну БД. Абстрактный unix-сокет эксклюзивен на уровне
+    ядра и освобождается вместе с процессом — протухнуть не может."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.bind("\0" + _LOCK_NAME)  # ведущий \0 → абстрактное пространство имён
+    except OSError:
+        raise SystemExit(
+            "Бот уже запущен — вторая копия запрещена (конфликт getUpdates и записи в БД).\n"
+            "Проверьте сервис: systemctl --user status lesson-tracker-selfhosted"
+        )
+    return sock
 
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    lock = _acquire_single_instance_lock()  # держим ссылку до конца процесса
     cfg = load_config()
 
     engine, sessionmaker = create_db(cfg.db_url)
@@ -54,5 +72,5 @@ async def main() -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    except KeyboardInterrupt:
+        pass  # SystemExit (напр. от гарда второй копии) намеренно НЕ глушим
