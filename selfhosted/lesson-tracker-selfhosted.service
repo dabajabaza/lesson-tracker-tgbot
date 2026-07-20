@@ -1,0 +1,28 @@
+# Юнит systemd --user для self-hosted (aiogram) версии.
+# ВНИМАНИЕ: не запускать одновременно с serverless-ботом (lesson-tracker-bot) —
+# два процесса конфликтуют за getUpdates (Telegram 409). Это замена, не дополнение.
+#
+# Установка (из каталога selfhosted/, после подготовки .venv и токена):
+#   systemctl --user disable --now lesson-tracker-bot
+#   cp lesson-tracker-selfhosted.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lesson-tracker-selfhosted
+# Логи: journalctl --user -u lesson-tracker-selfhosted -f
+
+[Unit]
+Description=LessonTracker42Bot — self-hosted (aiogram, long polling)
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/lesson_tracker_tg_bot/selfhosted
+ExecStart=%h/Projects/lesson_tracker_tg_bot/selfhosted/.venv/bin/python -m bot
+# Прямой доступ к api.telegram.org в этой сети режется — ходим через прокси.
+Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
