@@ -1,4 +1,4 @@
-# LessonTracker42Bot — self-hosted (aiogram)
+# Lesson Tracker Telegram Bot — self-hosted (aiogram)
 
 Порт бота учёта оплат на **Python + aiogram 3** для self-hosted-деплоя. Функционально
 повторяет `../serverless/` (тот же бот, те же сценарии ТЗ), но работает как обычный
