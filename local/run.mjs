@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dns from 'node:dns';
+import net from 'node:net';
 
 // В этой сети IPv6-маршрут до api.telegram.org периодически умирает,
 // а fetch не откатывается на IPv4 сам (в отличие от curl) — закрепляем IPv4.
@@ -16,7 +17,34 @@ register('./loader.mjs', import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Гард от второй копии: две копии дерутся за getUpdates (Telegram отдаёт 409)
+// и обе пишут в одну SQLite. Абстрактный unix-сокет (Linux) эксклюзивен на
+// уровне ядра и освобождается вместе с процессом — протухнуть не может.
+function acquireSingleInstanceLock() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on('error', (e) => {
+      if (e.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            'Бот уже запущен — вторая копия запрещена (конфликт getUpdates и записи в БД).\n' +
+              'Если бот работает как сервис: systemctl --user status lesson-tracker-bot'
+          )
+        );
+      } else {
+        reject(e);
+      }
+    });
+    // \0 — абстрактное пространство имён: файла на диске нет.
+    srv.listen('\0lesson-tracker-bot.lock', () => {
+      srv.unref();
+      resolve();
+    });
+  });
+}
+
 async function main() {
+  await acquireSingleInstanceLock();
   const { api, __migrate, BotApiError } = await import('sdk');
   const schema = await import('schema');
   const { default: onMessage } = await import(pathToFileURL(join(ROOT, 'handlers/message.js')).href);
