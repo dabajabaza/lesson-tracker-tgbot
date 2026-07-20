@@ -1,4 +1,4 @@
-# LessonTracker42Bot — serverless-версия
+# Lesson Tracker Telegram Bot — serverless-версия
 
 > Это `serverless/`-вариант проекта (JS для Telegram Serverless). Параллельно
 > в `../selfhosted/` ведётся порт на Python/aiogram для self-hosted-деплоя;
