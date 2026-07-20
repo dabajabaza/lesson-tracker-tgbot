@@ -1,5 +1,5 @@
 # Юнит для systemd --user: автозапуск и автоперезапуск локального бота.
-# Установка:
+# Установка (из каталога serverless/):
 #   cp local/lesson-tracker-bot.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now lesson-tracker-bot
@@ -10,18 +10,18 @@ Description=LessonTracker42Bot — Telegram-бот учёта оплат (long p
 # Прокси (nekobox, 127.0.0.1:1080) должен успеть подняться; при недоступности
 # сети раннер сам ретраится и перезапускается.
 After=network-online.target
+# Не молотить бесконечно, если что-то сломано фундаментально (нет токена и т.п.)
+StartLimitIntervalSec=300
+StartLimitBurst=20
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/lesson_tracker_tg_bot
+WorkingDirectory=%h/Projects/lesson_tracker_tg_bot/serverless
 ExecStart=%h/.nvm/versions/node/v24.14.1/bin/node --no-warnings local/run.mjs
 Environment=NODE_USE_ENV_PROXY=1
 Environment=HTTPS_PROXY=http://127.0.0.1:1080
 Restart=always
 RestartSec=5
-# Не молотить бесконечно, если что-то сломано фундаментально (нет токена и т.п.)
-StartLimitIntervalSec=300
-StartLimitBurst=20
 
 [Install]
 WantedBy=default.target

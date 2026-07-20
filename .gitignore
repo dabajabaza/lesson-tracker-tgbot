@@ -1,11 +1,23 @@
-# зависимости и состояние CLI
+# Общий gitignore монорепо. Специфика serverless/ и selfhosted/ — в их
+# собственных .gitignore.
+
+# Node
 node_modules/
-.tgcloud/
 npm-debug.log*
 
-# машинно-специфичный конфиг (прокси)
-.npmrc
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
 
-# секреты и данные — не коммитить
+# Секреты и локальные данные
 .bot-token
-local/data.sqlite*
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Машинно-специфичное
+.npmrc

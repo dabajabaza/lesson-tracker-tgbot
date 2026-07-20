@@ -1,0 +1,11 @@
+# зависимости и состояние CLI
+node_modules/
+.tgcloud/
+npm-debug.log*
+
+# машинно-специфичный конфиг (прокси)
+.npmrc
+
+# секреты и данные — не коммитить
+.bot-token
+local/data.sqlite*

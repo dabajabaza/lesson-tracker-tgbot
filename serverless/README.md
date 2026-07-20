@@ -1,4 +1,9 @@
-# LessonTracker42Bot
+# LessonTracker42Bot — serverless-версия
+
+> Это `serverless/`-вариант проекта (JS для Telegram Serverless). Параллельно
+> в `../selfhosted/` ведётся порт на Python/aiogram для self-hosted-деплоя;
+> после переезда на него эта версия будет выведена из эксплуатации. Все команды
+> ниже выполняются из каталога `serverless/`.
 
 Telegram-бот учёта оплат учеников преподавателя английского языка.
 Работает на **Telegram Serverless** — код исполняется на инфраструктуре Telegram,
