@@ -57,6 +57,25 @@ npm run local
 NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:1080 npm run local
 ```
 
+### Автозапуск как systemd-сервис (рекомендуется)
+
+Ручной запуск умирает вместе с терминалом и сном ноутбука. Надёжный способ —
+user-сервис systemd (юнит лежит в `local/lesson-tracker-bot.service`, прокси
+уже прописан внутри):
+
+```bash
+cp local/lesson-tracker-bot.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now lesson-tracker-bot
+
+systemctl --user status lesson-tracker-bot     # состояние
+journalctl --user -u lesson-tracker-bot -f     # логи
+```
+
+Сервис перезапускается сам: при падении процесса, при зависшей после сна
+сети (раннер выходит после ~5 минут сплошных ошибок, запросы имеют таймаут
+45 с) и при перезагрузке машины (нужен `loginctl enable-linger`).
+
 База — `local/data.sqlite`. Токен ищется в `BOT_TOKEN` или файле `.bot-token`
 (оба в .gitignore).
 

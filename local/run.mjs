@@ -41,8 +41,14 @@ async function main() {
       errors = 0;
     } catch (e) {
       errors++;
-      const wait = Math.min(30000, 1000 * 2 ** errors);
       const cause = e.cause?.code || e.cause?.message || '';
+      // После ~5 минут сплошных ошибок выходим: под systemd (Restart=always)
+      // свежий процесс переподнимет DNS/сокеты — лечит зависания после сна.
+      if (errors >= 10) {
+        console.error(`getUpdates: сеть не восстанавливается (${errors} ошибок подряд, последняя: ${e.message} ${cause}) — перезапуск процесса.`);
+        process.exit(1);
+      }
+      const wait = Math.min(30000, 1000 * 2 ** errors);
       console.error(`getUpdates: ${e.message}${cause ? ` (${cause})` : ''}; повтор через ${wait / 1000}с`);
       await sleep(wait);
       continue;

@@ -43,10 +43,14 @@ export const api = new Proxy(
     get(_, method) {
       return async (params = {}) => {
         token ??= readToken();
+        // Таймаут обязателен: после сна ноутбука TCP-соединение может «зависнуть»
+        // навсегда, и long polling молча остановится. 45с хватает на getUpdates
+        // с серверным timeout=30.
         const res = await globalThis.fetch(`https://api.telegram.org/bot${token}/${method}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(params),
+          signal: AbortSignal.timeout(45_000),
         });
         const data = await res.json();
         if (!data.ok) throw new BotApiError(data.error_code, data.description, method, data.parameters);
