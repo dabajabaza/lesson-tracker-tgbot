@@ -16,11 +16,16 @@ StartLimitIntervalSec=300
 StartLimitBurst=20
 
 [Service]
-Type=simple
+# notify: бот сам сообщает READY=1 (связь с Telegram установлена) и периодически
+# WATCHDOG=1. Перестал пинговать дольше WatchdogSec (завис на мёртвом соединении
+# после смены сети / провала прокси) — systemd убивает и перезапускает.
+Type=notify
+WatchdogSec=90
 WorkingDirectory=%h/Projects/lesson_tracker_tg_bot/selfhosted
 ExecStart=%h/Projects/lesson_tracker_tg_bot/selfhosted/.venv/bin/python -m bot
 # Прямой доступ к api.telegram.org в этой сети режется — ходим через прокси.
 Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
+# Restart=always покрывает и штатный выход, и срабатывание watchdog.
 Restart=always
 RestartSec=5
 
