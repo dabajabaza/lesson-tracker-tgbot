@@ -12,8 +12,12 @@
 [Unit]
 Description=LessonTracker42Bot — self-hosted (aiogram, long polling)
 After=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=20
+# Терпим многоминутный провал прокси/сети без вечного failed: редкие рестарты
+# (watchdog-kill при обрыве и т.п.) разнесены RestartSec=15, а окно/burst
+# подобраны так, чтобы блип не сжигал лимит. Стартовую недоступность прокси
+# бот теперь переживает сам (_establish_connection) и вовсе не выходит.
+StartLimitIntervalSec=900
+StartLimitBurst=60
 
 [Service]
 # notify: бот сам сообщает READY=1 (связь с Telegram установлена) и периодически
@@ -27,7 +31,7 @@ ExecStart=%h/Projects/lesson_tracker_tg_bot/selfhosted/.venv/bin/python -m bot
 Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
 # Restart=always покрывает и штатный выход, и срабатывание watchdog.
 Restart=always
-RestartSec=5
+RestartSec=15
 
 [Install]
 WantedBy=default.target

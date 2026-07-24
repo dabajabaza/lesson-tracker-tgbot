@@ -6,6 +6,7 @@ import socket
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import ErrorEvent
 
 from .config import load_config
@@ -29,6 +30,43 @@ _POLLING_TIMEOUT = 20  # длительность long-poll (сек) → detect 
 # должен быть заметно больше interval (см. lesson-tracker-selfhosted.service).
 _WATCHDOG_INTERVAL = 30
 _WATCHDOG_PROBE_TIMEOUT = 10
+# Стартовый ретрай связи с Telegram. Прокси (см. TELEGRAM_PROXY) может быть ещё
+# не поднят / временно лежать в момент старта — не падаем, а ждём с backoff.
+_CONNECT_RETRY_START = 3.0  # первая пауза (сек)
+_CONNECT_RETRY_MAX = 30.0  # потолок паузы (сек)
+# Пока ждём под systemd (Type=notify), продлеваем стартовый таймаут, чтобы
+# systemd не убил нас по TimeoutStartSec и не жёг лимит рестартов из-за блипа
+# прокси. Запас с потолком над (_CONNECT_RETRY_MAX + таймаут запроса).
+_START_EXTEND_USEC = 120 * 1_000_000
+
+
+async def _establish_connection(bot: Bot):
+    """Ждём доступности Telegram через настроенный прокси/сеть и возвращаем get_me.
+
+    Провал прокси или сети на старте — транзиентная беда: ретраимся с
+    экспоненциальным backoff вместо exit(1), иначе редкий блип прокси жёг бы
+    лимит рестартов юнита и оставлял сервис в failed. Фатальные ошибки API
+    (битый токен → 401 и пр.) НЕ маскируем — пробрасываем, ретрай тут не поможет.
+    """
+    delay = _CONNECT_RETRY_START
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            me = await bot.get_me()
+            await bot.delete_webhook(drop_pending_updates=False)
+            return me
+        except Exception as e:
+            if isinstance(e, TelegramAPIError) and not isinstance(e, TelegramNetworkError):
+                raise  # 401/битый токен/битые настройки — ретрай не спасёт
+            # ProxyConnectionError, сеть, таймаут, DNS — ждём и пробуем снова.
+            sd_notify(f"EXTEND_TIMEOUT_USEC={_START_EXTEND_USEC}")
+            logging.warning(
+                "Telegram недоступен на старте (попытка %d): %r. Повтор через %gс.",
+                attempt, e, delay,
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _CONNECT_RETRY_MAX)
 
 
 def _acquire_single_instance_lock() -> socket.socket:
@@ -76,9 +114,9 @@ async def main() -> None:
             pass
         return True
 
-    me = await bot.get_me()
+    # Устанавливаем связь с Telegram, переживая недоступность прокси/сети на старте.
+    me = await _establish_connection(bot)
     logging.info("Бот @%s запущен (long polling).", me.username)
-    await bot.delete_webhook(drop_pending_updates=False)
 
     # Связь установлена — сообщаем systemd о готовности (Type=notify) и запускаем
     # watchdog-пробу параллельно поллингу. Оба — no-op вне systemd notify.
