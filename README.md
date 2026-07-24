@@ -2,17 +2,13 @@
 
 Telegram-бот учёта оплат учеников преподавателя английского языка (учёт по
 абонементам: оплаты, денежный остаток, списание/возврат занятий, история,
-отмена, поиск, сортировки, экспорт). ТЗ — `serverless/docs/technical-specification.txt`.
+отмена, поиск, сортировки, экспорт). ТЗ — `selfhosted/docs/technical-specification.txt`.
 
-Монорепо с двумя реализациями одного бота (@LessonTracker42Bot):
+Реализация — [`selfhosted/`](selfhosted/): Python, aiogram 3 + SQLAlchemy, long
+polling, работает как systemd-сервис `lesson-tracker-selfhosted` (@LessonTracker42Bot).
+Мультитенантный (данные каждого преподавателя изолированы). Подробности и запуск —
+в [`selfhosted/README.md`](selfhosted/README.md).
 
-| Каталог         | Стек                              | Статус |
-|-----------------|-----------------------------------|--------|
-| [`selfhosted/`](selfhosted/) | Python, aiogram 3 + SQLAlchemy  | **Рабочая версия** (с 2026-07-21). Long polling, systemd-сервис `lesson-tracker-selfhosted`, данные перенесены из serverless. |
-| [`serverless/`](serverless/) | JavaScript, Telegram Serverless | Выведена из эксплуатации (остановлена и отключена). Ждёт открытия беты Telegram Serverless как запасной вариант. |
-
-Обе реализации функционально эквивалентны и мультитенантны (данные каждого
-преподавателя изолированы). Подробности и запуск — в README каждого каталога.
-
-> ⚠️ Одновременно работает только **одна** версия: два процесса конфликтуют за
-> getUpdates одного бота (Telegram 409).
+> Ранее в репозитории была вторая, serverless-реализация на JavaScript (под
+> Telegram Serverless). С переездом на self-hosted 2026-07-21 она выведена из
+> эксплуатации и удалена; при необходимости её можно поднять из истории git.
