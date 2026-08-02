@@ -100,3 +100,37 @@ class FsmRecord(Base):
     key: Mapped[str] = mapped_column(String, primary_key=True)
     state: Mapped[str | None] = mapped_column(String)
     data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class AllowedUser(Base):
+    """Белый список доступа. Бот отвечает только админам (из ADMIN_IDS) и тем,
+    кто здесь, — иначе любой нашедший бота в поиске стал бы арендатором и
+    сыпал спамом.
+
+    Админов тут нет: их даёт конфиг, а не таблица. Строка появляется только у
+    того, кого впустили явно — через /allow или погашенный инвайт."""
+
+    __tablename__ = "allowed_users"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    username: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    # Кто впустил: id админа при /allow, автор инвайта при переходе по ссылке.
+    invited_by: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class Invite(Base):
+    """Одноразовый код-приглашение, живёт ограниченное время.
+
+    Гасится переходом по deep-link `/start <код>`. Одноразовость держится не
+    проверкой в коде, а UPDATE ... WHERE used_by IS NULL (см. access.py):
+    два одновременных перехода иначе могли бы погасить один код дважды."""
+
+    __tablename__ = "invites"
+
+    code: Mapped[str] = mapped_column(String, primary_key=True)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    used_by: Mapped[int | None] = mapped_column(BigInteger)
+    used_at: Mapped[int | None] = mapped_column(BigInteger)
