@@ -1,18 +1,22 @@
 """Точка входа: long polling. Запуск: python -m bot (из каталога selfhosted/)."""
 
 import asyncio
+import fcntl
 import logging
+import os
 import socket
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import ErrorEvent
 
+from .admin import router as admin_router
 from .config import load_config
 from .db import create_db, init_models
 from .handlers import router
-from .middlewares import DbSessionMiddleware
+from .middlewares import AccessMiddleware, DbSessionMiddleware
 from .storage import SqlAlchemyStorage
 from .watchdog import run_watchdog, sd_notify
 
@@ -69,19 +73,38 @@ async def _establish_connection(bot: Bot):
             delay = min(delay * 2, _CONNECT_RETRY_MAX)
 
 
-def _acquire_single_instance_lock() -> socket.socket:
-    """Гард от второй копии: две копии дерутся за getUpdates (Telegram 409) и
-    параллельно пишут в одну БД. Абстрактный unix-сокет эксклюзивен на уровне
-    ядра и освобождается вместе с процессом — протухнуть не может."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+_ALREADY_RUNNING = (
+    "Бот уже запущен — вторая копия запрещена (конфликт getUpdates и записи в БД)."
+)
+
+
+def _acquire_single_instance_lock():
+    r"""Гард от второй копии: две копии дерутся за getUpdates (Telegram 409) и
+    параллельно пишут в одну БД.
+
+    Оба варианта дают одну и ту же гарантию — блокировку снимает ядро вместе со
+    смертью процесса, поэтому она не может протухнуть:
+
+    * Linux — абстрактный unix-сокет (ведущий \0), не оставляет файла на диске.
+    * Остальные ОС (сервер на FreeBSD) — flock на обычном файле. Абстрактного
+      пространства имён там нет: bind("\0...") падает с ENOENT, и прежний код
+      принимал это за «уже запущен», из-за чего бот не стартовал вовсе.
+    """
+    if sys.platform.startswith("linux"):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind("\0" + _LOCK_NAME)  # ведущий \0 → абстрактное пространство имён
+        except OSError:
+            raise SystemExit(_ALREADY_RUNNING)
+        return sock
+
+    lock_path = os.environ.get("LOCK_FILE") or os.path.join("/tmp", _LOCK_NAME)
+    handle = open(lock_path, "w")  # noqa: SIM115 — держим открытым до конца процесса
     try:
-        sock.bind("\0" + _LOCK_NAME)  # ведущий \0 → абстрактное пространство имён
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        raise SystemExit(
-            "Бот уже запущен — вторая копия запрещена (конфликт getUpdates и записи в БД).\n"
-            "Проверьте сервис: systemctl --user status lesson-tracker-selfhosted"
-        )
-    return sock
+        raise SystemExit(_ALREADY_RUNNING)
+    return handle
 
 
 async def main() -> None:
@@ -96,8 +119,22 @@ async def main() -> None:
     bot = Bot(token=cfg.token, session=session)
 
     dp = Dispatcher(storage=SqlAlchemyStorage(sessionmaker))
+    # admin_ids кладём в workflow-данные — aiogram отдаст их обработчикам,
+    # объявившим одноимённый параметр.
+    dp["admin_ids"] = cfg.admin_ids
+
     dp.update.middleware(DbSessionMiddleware(sessionmaker))
+    # Строго после сессии: AccessMiddleware читает allowed_users из data["session"].
+    dp.update.middleware(AccessMiddleware(cfg.admin_ids))
+
+    # Админский роутер — раньше основного: там catch-all обработчики.
+    dp.include_router(admin_router)
     dp.include_router(router)
+
+    if not cfg.admin_ids:
+        logging.warning(
+            "ADMIN_IDS пуст — /invite и /allow недоступны, новых пользователей впустить нечем."
+        )
 
     @dp.errors()
     async def on_error(event: ErrorEvent):
