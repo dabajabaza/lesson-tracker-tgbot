@@ -37,13 +37,13 @@ def format_money(kopecks: int) -> str:
     """160000 → «1 600 ₽», 160050 → «1 600,50 ₽» (разделитель тысяч — пробел)."""
     sign = "-" if kopecks < 0 else ""
     rub, kop = divmod(abs(kopecks), 100)
-    rub_str = "{:,}".format(rub).replace(",", " ")
-    frac = ",{:02d}".format(kop) if kop else ""
-    return "{}{}{} ₽".format(sign, rub_str, frac)
+    rub_str = f"{rub:,}".replace(",", " ")
+    frac = f",{kop:02d}" if kop else ""
+    return f"{sign}{rub_str}{frac} ₽"
 
 
 def to_rubles(kopecks: int) -> str:
     """Для CSV/Excel: 160050 → «1600,50» (десятичная запятая под русский Excel)."""
     sign = "-" if kopecks < 0 else ""
     rub, kop = divmod(abs(kopecks), 100)
-    return "{}{},{:02d}".format(sign, rub, kop)
+    return f"{sign}{rub},{kop:02d}"

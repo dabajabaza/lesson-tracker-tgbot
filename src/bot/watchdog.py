@@ -60,7 +60,8 @@ async def run_watchdog(bot, *, interval: float, probe_timeout: float) -> None:
                 await bot.get_me(request_timeout=int(probe_timeout))
         except Exception as e:  # noqa: BLE001 — любой сбой пробы = «нездоров»
             log.warning(
-                "проба Telegram не прошла (%s) — systemd не пингуем, ждём авто-рестарт по WatchdogSec.",
+                "проба Telegram не прошла (%s) — systemd не пингуем, "
+                "ждём авто-рестарт по WatchdogSec.",
                 type(e).__name__,
             )
         else:

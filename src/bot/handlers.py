@@ -1,5 +1,6 @@
 """Обработчики сообщений и колбэков. Мультитенантность: owner_id = from_user.id."""
 
+import contextlib
 import re
 
 from aiogram import F, Router
@@ -36,12 +37,27 @@ router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 # ---------- утилиты ----------
 
+
 def _as_int(value) -> int | None:
     """Безопасный разбор аргумента callback_data (его может подделать клиент)."""
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _owner(message: Message) -> int:
+    """Отправитель как владелец данных.
+
+    В приватном чате from_user есть всегда (роутер фильтрует по PRIVATE), но в
+    общем случае aiogram допускает None — например, пост канала. Если такой
+    апдейт всё же дойдёт сюда, честная ошибка со смыслом лучше, чем
+    AttributeError из глубины обработчика.
+    """
+    user = message.from_user
+    if user is None:
+        raise RuntimeError("Сообщение без from_user прошло фильтр приватного чата")
+    return user.id
 
 
 async def _menu(session: AsyncSession, owner_id: int):
@@ -54,7 +70,10 @@ def _money_error(kind: str, error: str, example: str) -> str:
     noun = "Стоимость" if kind == "price" else "Сумма"
     acc = "стоимость" if kind == "price" else "сумму"
     if error == "range":
-        return f"⚠️ Слишком большая {noun.lower()} — максимум {format_money(MAX_MONEY)}. Введите {acc} поменьше:"
+        return (
+            f"⚠️ Слишком большая {noun.lower()} — максимум {format_money(MAX_MONEY)}. "
+            f"Введите {acc} поменьше:"
+        )
     if error == "zero":
         return f"⚠️ {noun} должна быть больше нуля. Введите число, например: {example}"
     return f"⚠️ Это не похоже на {acc}. Введите число в рублях, например: {example}"
@@ -63,18 +82,18 @@ def _money_error(kind: str, error: str, example: str) -> str:
 async def _delete_quietly(bot, chat_id: int, message_id: int | None) -> None:
     if not message_id:
         return
-    try:
+    # Удаление косметическое: сообщение уже удалено / сеть — не критично.
+    with contextlib.suppress(TelegramAPIError):
         await bot.delete_message(chat_id, message_id)
-    except TelegramAPIError:
-        pass  # удаление косметическое: сообщение уже удалено / сеть — не критично
 
 
 # ---------- команды и текстовый ввод (FSM) ----------
 
+
 @router.message(Command("start", "menu"))
 async def on_start(message: Message, session: AsyncSession, state: FSMContext) -> None:
     await state.clear()
-    text, kb = await _menu(session, message.from_user.id)
+    text, kb = await _menu(session, _owner(message))
     await message.answer(text, reply_markup=kb)
 
 
@@ -82,18 +101,30 @@ async def on_start(message: Message, session: AsyncSession, state: FSMContext) -
 async def on_payment_amount(message: Message, session: AsyncSession, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text:
-        await message.answer("Отправьте, пожалуйста, текстовое сообщение.", reply_markup=cancel_kb())
+        await message.answer(
+            "Отправьте, пожалуйста, текстовое сообщение.", reply_markup=cancel_kb()
+        )
         return
     parsed = parse_money_strict(text)
-    if parsed.error:
-        await message.answer(_money_error("amount", parsed.error, "1600"), reply_markup=cancel_kb())
+    # parsed.value is None вне error-ветки не бывает, но типам это неизвестно.
+    if parsed.error or parsed.value is None:
+        await message.answer(
+            _money_error("amount", parsed.error or "format", "1600"), reply_markup=cancel_kb()
+        )
         return
     data = await state.get_data()
-    res = await repo.apply_payment(session, message.from_user.id, data.get("student_id"), parsed.value)
+    # student_id мог не пережить потерю состояния — тогда ведём себя как при
+    # «ученик не найден» ниже: показываем меню.
+    student_id = _as_int(data.get("student_id"))
+    res = (
+        await repo.apply_payment(session, _owner(message), student_id, parsed.value)
+        if student_id is not None
+        else None
+    )
     await state.clear()
     await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     if not res:
-        text, kb = await _menu(session, message.from_user.id)
+        text, kb = await _menu(session, _owner(message))
         await message.answer(text, reply_markup=kb)
         return
     lines = [f"✅ Оплата {format_money(parsed.value)} внесена."]
@@ -101,8 +132,12 @@ async def on_payment_amount(message: Message, session: AsyncSession, state: FSMC
         lines.append(f"Учтён прежний остаток: {format_money(res.prev_remainder)}.")
     lines.append(f"Добавлено: {res.lessons} {lessons_word(res.lessons)}.")
     if res.remainder > 0:
-        lines.append(f"Денежный остаток: {format_money(res.remainder)} — будет учтён при следующей оплате.")
-    await message.answer("\n".join(lines) + "\n\n" + render_card(res.student), reply_markup=card_kb(res.student.id))
+        lines.append(
+            f"Денежный остаток: {format_money(res.remainder)} — будет учтён при следующей оплате."
+        )
+    await message.answer(
+        "\n".join(lines) + "\n\n" + render_card(res.student), reply_markup=card_kb(res.student.id)
+    )
 
 
 @router.message(Flow.new_name)
@@ -115,8 +150,11 @@ async def on_new_name(message: Message, session: AsyncSession, state: FSMContext
     if len(name) > 80:
         await message.answer("⚠️ Слишком длинное имя. Введите короче:", reply_markup=cancel_kb())
         return
-    if await repo.find_by_name_lower(session, message.from_user.id, name):
-        await message.answer(f"⚠️ Ученик с именем «{name}» уже существует. Введите другое имя:", reply_markup=cancel_kb())
+    if await repo.find_by_name_lower(session, _owner(message), name):
+        await message.answer(
+            f"⚠️ Ученик с именем «{name}» уже существует. Введите другое имя:",
+            reply_markup=cancel_kb(),
+        )
         return
     data = await state.get_data()
     await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
@@ -135,18 +173,31 @@ async def on_new_price(message: Message, session: AsyncSession, state: FSMContex
         await message.answer("Введите стоимость занятия:", reply_markup=cancel_kb())
         return
     parsed = parse_money_strict(text)
-    if parsed.error:
-        await message.answer(_money_error("price", parsed.error, "1600"), reply_markup=cancel_kb())
+    if parsed.error or parsed.value is None:
+        await message.answer(
+            _money_error("price", parsed.error or "format", "1600"), reply_markup=cancel_kb()
+        )
         return
     data = await state.get_data()
-    student = await repo.create_student(session, message.from_user.id, data.get("name"), parsed.value)
+    name = data.get("name")
+    if not isinstance(name, str) or not name:
+        # Состояние потерялось между шагами — просим имя заново, а не роняем
+        # обработчик на name=None внутри repo.
+        await state.set_state(Flow.new_name)
+        await message.answer("Введите имя ученика:", reply_markup=cancel_kb())
+        return
+    student = await repo.create_student(session, _owner(message), name, parsed.value)
     if not student:
         await state.set_state(Flow.new_name)
-        await message.answer(f"⚠️ Имя «{data.get('name')}» уже занято. Введите другое имя:", reply_markup=cancel_kb())
+        await message.answer(
+            f"⚠️ Имя «{data.get('name')}» уже занято. Введите другое имя:", reply_markup=cancel_kb()
+        )
         return
     await state.clear()
     await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
-    await message.answer(f"✅ Ученик добавлен.\n\n{render_card(student)}", reply_markup=card_kb(student.id))
+    await message.answer(
+        f"✅ Ученик добавлен.\n\n{render_card(student)}", reply_markup=card_kb(student.id)
+    )
 
 
 @router.message(Flow.price_change)
@@ -156,15 +207,22 @@ async def on_price_change(message: Message, session: AsyncSession, state: FSMCon
         await message.answer("Введите новую стоимость занятия:", reply_markup=cancel_kb())
         return
     parsed = parse_money_strict(text)
-    if parsed.error:
-        await message.answer(_money_error("price", parsed.error, "1800"), reply_markup=cancel_kb())
+    if parsed.error or parsed.value is None:
+        await message.answer(
+            _money_error("price", parsed.error or "format", "1800"), reply_markup=cancel_kb()
+        )
         return
     data = await state.get_data()
-    s = await repo.change_price(session, message.from_user.id, data.get("student_id"), parsed.value)
+    student_id = _as_int(data.get("student_id"))
+    s = (
+        await repo.change_price(session, _owner(message), student_id, parsed.value)
+        if student_id is not None
+        else None
+    )
     await state.clear()
     await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     if not s:
-        text, kb = await _menu(session, message.from_user.id)
+        text, kb = await _menu(session, _owner(message))
         await message.answer(text, reply_markup=kb)
         return
     await message.answer(
@@ -180,7 +238,7 @@ async def on_search(message: Message, session: AsyncSession, state: FSMContext) 
     if not text:
         await message.answer("Введите имя или его часть:", reply_markup=cancel_kb())
         return
-    found = await repo.search_students(session, message.from_user.id, text)
+    found = await repo.search_students(session, _owner(message), text)
     data = await state.get_data()
     await state.clear()
     await _delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
@@ -191,17 +249,21 @@ async def on_search(message: Message, session: AsyncSession, state: FSMContext) 
 @router.message(StateFilter(None))
 async def on_any_message(message: Message, session: AsyncSession) -> None:
     # Вне диалога любое сообщение показывает главное меню.
-    text, kb = await _menu(session, message.from_user.id)
+    text, kb = await _menu(session, _owner(message))
     await message.answer(text, reply_markup=kb)
 
 
 # ---------- колбэки (навигация по кнопкам) ----------
 
+
 @router.callback_query()
 async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     uid = cb.from_user.id
     msg = cb.message
-    if msg is None:
+    # isinstance, а не проверка на None: помимо отсутствующего сообщения бывает
+    # InaccessibleMessage (сообщение старше 48ч и т.п.) — у него нет ни
+    # edit_text, ни answer, и дальше с ним делать нечего.
+    if not isinstance(msg, Message):
         await cb.answer()
         return
 
@@ -253,15 +315,23 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer()
 
     elif cmd == "pay":
+        # Гард sid_cmds выше уже отсеял sid is None, но mypy не связывает
+        # проверку cmd со значением sid — сужаем явно.
+        assert sid is not None
         s = await repo.get_student(session, uid, sid)
         if not s:
             await cb.answer("Ученик не найден", show_alert=True)
             return
         await state.set_state(Flow.payment_amount)
         await state.update_data(student_id=s.id, prompt_id=msg.message_id)
-        note = f"\nДенежный остаток {format_money(s.remainder)} будет учтён." if s.remainder > 0 else ""
+        note = (
+            f"\nДенежный остаток {format_money(s.remainder)} будет учтён."
+            if s.remainder > 0
+            else ""
+        )
         await edit(
-            f"💵 {s.name}\nСтоимость занятия: {format_money(s.price)}.{note}\n\nВведите сумму оплаты:",
+            f"💵 {s.name}\nСтоимость занятия: {format_money(s.price)}.{note}\n\n"
+            "Введите сумму оплаты:",
             cancel_kb(),
         )
         await cb.answer()
@@ -273,7 +343,8 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
             return
         await edit(*await card_view(session, uid, s.id))
         await cb.answer(
-            f"⚠️ Урок списан. Долг: {abs(s.balance)}" if s.balance < 0
+            f"⚠️ Урок списан. Долг: {abs(s.balance)}"
+            if s.balance < 0
             else f"➖ Урок списан. Осталось: {s.balance}"
         )
 
@@ -286,6 +357,9 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer(f"↩️ Урок возвращён. Осталось: {s.balance}")
 
     elif cmd == "price":
+        # Гард sid_cmds выше уже отсеял sid is None, но mypy не связывает
+        # проверку cmd со значением sid — сужаем явно.
+        assert sid is not None
         s = await repo.get_student(session, uid, sid)
         if not s:
             await cb.answer("Ученик не найден", show_alert=True)
@@ -293,7 +367,8 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await state.set_state(Flow.price_change)
         await state.update_data(student_id=s.id, prompt_id=msg.message_id)
         await edit(
-            f"✏️ {s.name}\nТекущая стоимость: {format_money(s.price)}.\n\nВведите новую стоимость занятия:",
+            f"✏️ {s.name}\nТекущая стоимость: {format_money(s.price)}.\n\n"
+            "Введите новую стоимость занятия:",
             cancel_kb(),
         )
         await cb.answer()
@@ -339,10 +414,12 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         if res.status == "stale":
             await edit(*await _menu(session, uid))
             await cb.answer(
-                "⚠️ Появились новые операции — отмена не выполнена. Откройте «Отменить действие» ещё раз.",
+                "⚠️ Появились новые операции — отмена не выполнена. "
+                "Откройте «Отменить действие» ещё раз.",
                 show_alert=True,
             )
             return
+        assert res.op is not None  # status == "done" гарантирует операцию
         await edit(*await card_view(session, uid, res.op.student_id))
         await cb.answer("✅ Действие отменено")
 
@@ -355,20 +432,20 @@ async def on_callback(cb: CallbackQuery, session: AsyncSession, state: FSMContex
         await cb.answer()
 
     elif cmd in ("exp_xlsx", "exp_csv"):
-        await _send_export(cb, session, uid, "csv" if cmd == "exp_csv" else "xlsx")
+        await _send_export(msg, session, uid, "csv" if cmd == "exp_csv" else "xlsx")
         await cb.answer("Готово")
 
     else:
         await cb.answer()
 
 
-async def _send_export(cb: CallbackQuery, session: AsyncSession, uid: int, fmt: str) -> None:
+async def _send_export(msg: Message, session: AsyncSession, uid: int, fmt: str) -> None:
     """Экспорт учеников и истории документами (п.17–18 ТЗ).
     Каждый пользователь выгружает только свои данные."""
     students = await repo.list_students(session, uid, "name")
     ops = await repo.get_all_operations(session, uid)
     if not students and not ops:
-        await cb.message.answer("Экспортировать нечего — данных пока нет.")
+        await msg.answer("Экспортировать нечего — данных пока нет.")
         return
     names = {s.id: s.name for s in students}
     srows = students_rows(students)
@@ -384,4 +461,4 @@ async def _send_export(cb: CallbackQuery, session: AsyncSession, uid: int, fmt: 
             (rows_to_xlsx(hrows, "История"), "history.xlsx", "📜 История операций"),
         ]
     for data, filename, caption in docs:
-        await cb.message.answer_document(BufferedInputFile(data, filename), caption=caption)
+        await msg.answer_document(BufferedInputFile(data, filename), caption=caption)

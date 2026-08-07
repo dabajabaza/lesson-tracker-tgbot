@@ -94,7 +94,5 @@ async def redeem_invite(
         return False
 
     invite = await session.get(Invite, code)
-    await allow_user(
-        session, user_id, username, invited_by=invite.created_by if invite else None
-    )
+    await allow_user(session, user_id, username, invited_by=invite.created_by if invite else None)
     return True

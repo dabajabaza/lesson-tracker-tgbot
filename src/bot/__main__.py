@@ -1,6 +1,7 @@
 """Точка входа: long polling. Запуск: python -m bot (из корня репозитория)."""
 
 import asyncio
+import contextlib
 import fcntl
 import logging
 import os
@@ -70,15 +71,15 @@ async def _establish_connection(bot: Bot):
             sd_notify(f"EXTEND_TIMEOUT_USEC={_START_EXTEND_USEC}")
             logging.warning(
                 "Telegram недоступен на старте (попытка %d): %r. Повтор через %gс.",
-                attempt, e, delay,
+                attempt,
+                e,
+                delay,
             )
             await asyncio.sleep(delay)
             delay = min(delay * 2, _CONNECT_RETRY_MAX)
 
 
-_ALREADY_RUNNING = (
-    "Бот уже запущен — вторая копия запрещена (конфликт getUpdates и записи в БД)."
-)
+_ALREADY_RUNNING = "Бот уже запущен — вторая копия запрещена (конфликт getUpdates и записи в БД)."
 
 
 def _acquire_single_instance_lock():
@@ -98,7 +99,9 @@ def _acquire_single_instance_lock():
         try:
             sock.bind("\0" + _LOCK_NAME)  # ведущий \0 → абстрактное пространство имён
         except OSError:
-            raise SystemExit(_ALREADY_RUNNING)
+            # from None: причина OSError («адрес занят») пользователю не нужна,
+            # важен только вердикт «вторая копия».
+            raise SystemExit(_ALREADY_RUNNING) from None
         return sock
 
     lock_path = os.environ.get("LOCK_FILE") or os.path.join("/tmp", _LOCK_NAME)
@@ -106,7 +109,7 @@ def _acquire_single_instance_lock():
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        raise SystemExit(_ALREADY_RUNNING)
+        raise SystemExit(_ALREADY_RUNNING) from None
     return handle
 
 
@@ -163,8 +166,10 @@ def build_dispatcher(
 
 
 async def _run_bot() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    lock = _acquire_single_instance_lock()  # держим ссылку до конца процесса
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    _lock = _acquire_single_instance_lock()  # держим ссылку до конца процесса
     cfg = load_config()
 
     _engine, sessionmaker = create_db(cfg.db_url)
@@ -206,7 +211,9 @@ def main() -> None:
     цикл событий, поэтому вызвать его из уже работающего asyncio.run нельзя —
     получим «cannot be called from a running event loop».
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     cfg = load_config()
     logging.info("Применяю миграции БД")
     _run_migrations(cfg.db_url)
@@ -214,7 +221,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
+    # SystemExit (напр. от гарда второй копии) намеренно НЕ глушим.
+    with contextlib.suppress(KeyboardInterrupt):
         main()
-    except KeyboardInterrupt:
-        pass  # SystemExit (напр. от гарда второй копии) намеренно НЕ глушим

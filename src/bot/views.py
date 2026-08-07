@@ -29,7 +29,9 @@ async def main_menu_view(session, owner_id, sort="name", page=0):
     total_pages = max(1, math.ceil(len(students) / PAGE_SIZE))
     page = min(max(page, 0), total_pages - 1)
     chunk = students[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
-    text = f"👩‍🏫 Ученики: {len(students)}\nСортировка: {SORT_LABELS.get(sort, SORT_LABELS['name'])}"
+    text = (
+        f"👩‍🏫 Ученики: {len(students)}\nСортировка: {SORT_LABELS.get(sort, SORT_LABELS['name'])}"
+    )
     return text, main_menu_kb(chunk, sort, page, total_pages)
 
 
@@ -56,7 +58,10 @@ async def history_view(session, owner_id, sid, page=0):
 
 def search_results_view(found, query):
     shown = found[:MAX_SEARCH_RESULTS]
-    rows = [[InlineKeyboardButton(text=list_button_label(s), callback_data=f"card:{s.id}")] for s in shown]
+    rows = [
+        [InlineKeyboardButton(text=list_button_label(s), callback_data=f"card:{s.id}")]
+        for s in shown
+    ]
     rows.append([InlineKeyboardButton(text="⬅️ К списку", callback_data="home")])
     if not found:
         text = f"🔍 По запросу «{query}» никого не нашлось."

@@ -25,8 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # gitleaks смотрит всю историю, а не только последний коммит,
-          # поэтому мелкий клон здесь не годится
+          # gitleaks смотрит всю историю, а не только последний коммит
           fetch-depth: 0
 
       - name: Поиск секретов
@@ -37,15 +36,30 @@ jobs:
           "$RUNNER_TEMP/gitleaks/gitleaks" detect \
             --source . --log-opts=--all --no-banner --redact
 
-      - uses: actions/setup-python@v7
+      # Точная версия, а не major-тег: setup-uv публикует подвижные теги только
+      # до v7, хотя релизы ушли дальше. Неразрешимая ссылка валит job ещё на
+      # «Set up job», не дойдя ни до одного шага.
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
-          # Ровно та же минорная версия, что на сервере (3.12.13):
-          # иначе тесты проверяют не то окружение, в котором бот работает.
-          python-version: '3.12'
-          cache: pip
+          enable-cache: true
 
-      - name: Зависимости
-        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Зависимости строго по локу
+        run: uv sync --locked
+
+      - name: Линтеры и типы
+        run: |
+          uv run ruff check src tests migrations migrate_from_serverless.py
+          uv run ruff format --check src tests migrations migrate_from_serverless.py
+          uv run mypy src
+
+      # На сервере uv нет: там зависимости ставятся pip'ом из requirements.txt,
+      # который порождается из uv.lock. Если файл забыть перегенерировать, деплой
+      # поставит не то, что проверял CI, — и разойдётся молча. Регенерируем той же
+      # командой и требуем отсутствия диффа.
+      - name: requirements.txt не разошёлся с uv.lock
+        run: |
+          uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
+          git diff --exit-code -- requirements.txt
 
       - name: Тесты
-        run: pytest -q
+        run: uv run pytest -q

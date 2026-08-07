@@ -7,7 +7,7 @@ FK намеренно не объявляем (как и в serverless-верс�
 
 import time
 
-from sqlalchemy import BigInteger, Boolean, Integer, JSON, String, UniqueConstraint, Index
+from sqlalchemy import JSON, BigInteger, Boolean, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -35,9 +35,7 @@ class Student(Base):
     last_payment_lessons: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
 
-    __table_args__ = (
-        UniqueConstraint("owner_id", "name_lower", name="uq_students_owner_name"),
-    )
+    __table_args__ = (UniqueConstraint("owner_id", "name_lower", name="uq_students_owner_name"),)
 
     def snapshot(self) -> dict:
         """Полная копия полей для отмены операции (п.16 ТЗ)."""

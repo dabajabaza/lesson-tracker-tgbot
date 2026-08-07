@@ -17,9 +17,7 @@ async def get_student(session: AsyncSession, owner_id: int, sid: int) -> Student
 
 
 async def list_students(session: AsyncSession, owner_id: int, sort: str = "name") -> list[Student]:
-    rows = list(
-        await session.scalars(select(Student).where(Student.owner_id == owner_id))
-    )
+    rows = list(await session.scalars(select(Student).where(Student.owner_id == owner_id)))
     # Учеников немного — сортируем в Python (п.15 ТЗ).
     if sort == "bal":
         rows.sort(key=lambda s: s.name.lower())
@@ -195,10 +193,15 @@ async def undo_last_operation(
 
 
 async def count_history(session: AsyncSession, owner_id: int, sid: int) -> int:
-    return await session.scalar(
-        select(func.count())
-        .select_from(Operation)
-        .where(Operation.owner_id == owner_id, Operation.student_id == sid)
+    # `or 0` — только для типов: select(count()) всегда возвращает строку,
+    # но scalar() объявлен как Optional.
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(Operation)
+            .where(Operation.owner_id == owner_id, Operation.student_id == sid)
+        )
+        or 0
     )
 
 
@@ -223,6 +226,7 @@ async def get_all_operations(session, owner_id) -> list[Operation]:
 
 
 # ---------- настройки отображения списка (п.15 ТЗ) ----------
+
 
 async def get_view_pref(session: AsyncSession, owner_id: int) -> tuple[str, int]:
     p = await session.get(UiPref, owner_id)
