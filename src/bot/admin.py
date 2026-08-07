@@ -41,7 +41,9 @@ async def cmd_invite(message: Message, session: AsyncSession, admin_ids: frozens
     assert message.from_user is not None and message.bot is not None
 
     invite = await access.create_invite(session, message.from_user.id)
-    await session.commit()
+    # Коммитит DbSessionMiddleware в конце апдейта. Ссылка уйдёт до фиксации:
+    # если коммит вдруг упадёт, ссылка окажется битой — переживаемо, /invite
+    # выпускается повторно.
 
     me = await message.bot.get_me()
     link = f"https://t.me/{me.username}?start={invite.code}"
@@ -75,7 +77,6 @@ async def cmd_allow(
 
     user_id = int(args)
     await access.allow_user(session, user_id, invited_by=message.from_user.id)
-    await session.commit()
     await message.answer(f"Пользователь <code>{user_id}</code> допущен.", parse_mode="HTML")
     log.info("Доступ выдан вручную: admin=%s user_id=%s", message.from_user.id, user_id)
 

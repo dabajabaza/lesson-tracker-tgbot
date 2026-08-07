@@ -1,11 +1,18 @@
-"""Middleware: сессия БД на апдейт + сериализация апдейтов одного пользователя.
+"""Middleware: единица работы + сериализация апдейтов одного пользователя.
 
-Коммит выполняют сами мутирующие функции repo (до отправки в Telegram) — здесь
-только выдаём сессию и откатываем незакоммиченный «хвост» при ошибке.
+Одна область запроса = одна транзакция. Сессию отдаёт dishka (см. di.py),
+функции repo НЕ коммитят — фиксирует DbSessionMiddleware, причём внутри
+пер-пользовательского замка. Замок обязан накрывать коммит: уехав в закрытие
+скоупа, коммит оказался бы за пределами замка, и второй апдейт того же
+пользователя (двойной тап) читал бы старый баланс до фиксации первого.
 
-Пер-пользовательский Lock: aiogram обрабатывает апдейты конкурентно, поэтому
-двойной тап (например «Списать урок») мог бы дать потерянное обновление баланса
-(read-modify-write без блокировки). Lock сериализует всё по владельцу."""
+Ответ пользователю уходит ДО коммита — сознательный разворот старого принципа
+«коммит до отправки». Старый порядок при сбое отправки давал дубль оплаты:
+запись уже есть, пользователь видит ошибку и вводит сумму снова. Новый при
+сбое отправки откатывает всё разом (повтор безопасен), а теряет данные только
+при отказе самого коммита — на локальном SQLite это умерший диск, не рабочий
+режим. Для денег дубль хуже потери.
+"""
 
 import asyncio
 import logging
@@ -14,8 +21,11 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import BaseStorage
 from aiogram.types import Message, TelegramObject
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from dishka import AsyncContainer
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import access
 
@@ -23,18 +33,28 @@ log = logging.getLogger(__name__)
 
 
 class DbSessionMiddleware(BaseMiddleware):
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]):
-        self.sessionmaker = sessionmaker
+    """Сессия из REQUEST-скоупа dishka + замок + коммит.
+
+    Регистрировать ПОСЛЕ ContainerMiddleware (нужен data["dishka_container"]).
+    """
+
+    def __init__(self) -> None:
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def _run(self, handler, event, data):
-        async with self.sessionmaker() as session:
-            data["session"] = session
-            try:
-                return await handler(event, data)
-            except Exception:
-                await session.rollback()  # откатить незакоммиченный хвост
-                raise
+        container: AsyncContainer = data["dishka_container"]
+        session = await container.get(AsyncSession)
+        data["session"] = session
+        try:
+            result = await handler(event, data)
+        except Exception:
+            # Откат здесь, а не только в провайдере: обработчик ошибок aiogram
+            # живёт снаружи скоупа и успел бы отправить «попробуйте ещё раз»
+            # раньше, чем провайдер откатил бы хвост.
+            await session.rollback()
+            raise
+        await session.commit()
+        return result
 
     async def __call__(
         self,
@@ -45,8 +65,38 @@ class DbSessionMiddleware(BaseMiddleware):
         user = data.get("event_from_user")
         if user is None:
             return await self._run(handler, event, data)
+        # aiogram обрабатывает апдейты конкурентно; замок сериализует
+        # read-modify-write одного пользователя (двойной тап по «Списать урок»).
         async with self._locks[user.id]:
             return await self._run(handler, event, data)
+
+
+class FsmSessionMiddleware(BaseMiddleware):
+    """Подменяет FSM-контекст на хранилище общей сессии запроса.
+
+    Встроенный FSMContextMiddleware aiogram собирает data["state"] поверх
+    хранилища диспетчера — у нас это read-only-обёртка (см. storage.py).
+    Здесь контекст пересобирается с тем же ключом, но поверх request-скоупного
+    SqlAlchemyStorage: записи состояния ложатся в ту же транзакцию, что и
+    бизнес-изменения. FSMContext — это только пара (storage, key), подмена
+    законна и дешева.
+
+    Регистрировать ПОСЛЕ DbSessionMiddleware — не по зависимости данных, а
+    чтобы запрошенное здесь хранилище получило ту же сессию из кэша скоупа.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        state: FSMContext | None = data.get("state")
+        if state is not None:
+            container: AsyncContainer = data["dishka_container"]
+            storage = await container.get(BaseStorage)
+            data["state"] = FSMContext(storage=storage, key=state.key)
+        return await handler(event, data)
 
 
 _MAX_TRACKED_IDS = 256
@@ -95,6 +145,9 @@ class AccessMiddleware(BaseMiddleware):
     дальше.
 
     Регистрировать ПОСЛЕ DbSessionMiddleware — берёт готовую сессию из data.
+    Погашение инвайта не коммитится здесь: оно зафиксируется общим коммитом,
+    только если апдейт обработан целиком. Упал обработчик — инвайт не сгорел,
+    человек проходит по ссылке ещё раз.
     """
 
     def __init__(self, admin_ids: frozenset[int]) -> None:
@@ -118,7 +171,6 @@ class AccessMiddleware(BaseMiddleware):
             code = _invite_code_from_start(event)
             invite_attempted = code is not None
             if code and await access.redeem_invite(session, code, user.id, user.username):
-                await session.commit()
                 allowed = True
                 log.info("Инвайт погашен: user_id=%s username=%s", user.id, user.username)
 

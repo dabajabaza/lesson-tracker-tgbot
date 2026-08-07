@@ -38,7 +38,7 @@ async def test_добавление_ученика_проходит_весь_д�
     assert "Не получилось выполнить действие" not in replies
 
 
-async def test_диалог_переживает_пересборку_диспетчера(harness, sessionmaker):
+async def test_диалог_переживает_пересборку_диспетчера(harness, sessionmaker, container):
     """Состояние диалога живёт в БД именно ради этого: деплой перезапускает
     процесс, а начатый ввод не должен пропадать.
 
@@ -57,7 +57,7 @@ async def test_диалог_переживает_пересборку_диспе
     await harness.dp.emit_shutdown()
     for router in _SHARED_ROUTERS:
         router._parent_router = None  # noqa: SLF001
-    harness.dp = build_dispatcher(sessionmaker, TEST_ADMIN_IDS)
+    harness.dp = build_dispatcher(container, TEST_ADMIN_IDS)
     await harness.dp.emit_startup()
 
     await harness.send("1600", user_id=ADMIN)

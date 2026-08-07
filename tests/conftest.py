@@ -13,15 +13,18 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from aiogram import Bot
+from dishka import AsyncContainer
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from bot.__main__ import build_dispatcher
 from bot.admin import router as admin_router
+from bot.config import Config
+from bot.db import create_db
+from bot.di import build_container
 from bot.handlers import router as main_router
 from tests.bot_harness import FAKE_BOT_TOKEN, BotHarness, RecordingSession
 from tests.schema import apply_migrations
@@ -57,7 +60,14 @@ def db_path(migrated_template: Path, tmp_path: Path) -> Path:
 
 @pytest_asyncio.fixture
 async def engine(db_path: Path) -> AsyncIterator[AsyncEngine]:
-    eng = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    """Движок собирается тем же create_db, что и в проде.
+
+    Не create_async_engine напрямую: в create_db живут PRAGMA и — важнее —
+    отключение собственного управления транзакциями у драйвера SQLite, без
+    которого SAVEPOINT не откатывается. Собери тесты своим движком — и они
+    будут проверять не ту семантику транзакций, которая работает в бою.
+    """
+    eng, _sm = create_db(f"sqlite+aiosqlite:///{db_path}")
     yield eng
     await eng.dispose()
 
@@ -73,10 +83,26 @@ async def session(sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterat
         yield s
 
 
+def make_config(db_path: Path) -> Config:
+    return Config(
+        token=FAKE_BOT_TOKEN,
+        db_url=f"sqlite+aiosqlite:///{db_path}",
+        proxy=None,
+        admin_ids=TEST_ADMIN_IDS,
+    )
+
+
 @pytest_asyncio.fixture
-async def harness(
-    sessionmaker: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[BotHarness]:
+async def container(db_path: Path) -> AsyncIterator[AsyncContainer]:
+    """Настоящий dishka-контейнер поверх той же per-test базы, что и фикстура
+    session (соединения разные — SQLite с WAL это переживает)."""
+    c = build_container(make_config(db_path))
+    yield c
+    await c.close()
+
+
+@pytest_asyncio.fixture
+async def harness(container: AsyncContainer) -> AsyncIterator[BotHarness]:
     """Полноценный диспетчер — собранный той же функцией, что и в проде, — и
     подделка сети вместо Telegram.
 
@@ -86,7 +112,7 @@ async def harness(
     session = RecordingSession()
     bot = Bot(token=FAKE_BOT_TOKEN, session=session)
 
-    dp = build_dispatcher(sessionmaker, TEST_ADMIN_IDS)
+    dp = build_dispatcher(container, TEST_ADMIN_IDS)
     await dp.emit_startup()
     try:
         yield BotHarness(bot=bot, dp=dp, session=session)
