@@ -47,18 +47,22 @@ async def create_student(
     session: AsyncSession, owner_id: int, name: str, price: int
 ) -> Student | None:
     """Создаёт ученика; None, если имя пустое или у этого владельца занято
-    (без учёта регистра). Коммитит до возврата."""
+    (без учёта регистра)."""
     clean = (name or "").strip()
     if not clean:
         return None
     if await find_by_name_lower(session, owner_id, clean):
         return None
     s = Student(owner_id=owner_id, name=clean, name_lower=clean.lower(), price=price)
-    session.add(s)
+    # Гонка двух одновременных апдейтов на UniqueConstraint(owner_id, name_lower):
+    # раньше её ловил session.commit() прямо здесь. Теперь repo не коммитит
+    # (единица работы фиксируется в middleware), поэтому нарушение констрейнта
+    # надо поймать в момент записи — SAVEPOINT + flush. Откатывается только
+    # вставка, транзакция запроса живёт дальше.
     try:
-        await session.commit()
+        async with session.begin_nested():
+            session.add(s)
     except IntegrityError:
-        await session.rollback()  # гонка на UniqueConstraint(owner_id, name_lower)
         return None
     return s
 
@@ -108,7 +112,6 @@ async def apply_payment(
     s.last_payment_at = now_ts()
     s.last_payment_amount = amount
     s.last_payment_lessons = lessons
-    await session.commit()  # фиксируем ДО отправки ответа в Telegram
     return PaymentResult(s, lessons, remainder, prev_remainder)
 
 
@@ -127,7 +130,6 @@ async def _shift_balance(
         remainder_after=s.remainder,
     )
     s.balance += delta
-    await session.commit()
     return s
 
 
@@ -154,7 +156,6 @@ async def change_price(session, owner_id, sid, new_price) -> Student | None:
         new_price=new_price,
     )
     s.price = new_price
-    await session.commit()
     return s
 
 
@@ -188,7 +189,6 @@ async def undo_last_operation(
     if s:
         s.restore(op.snapshot_before)
     op.undone = True
-    await session.commit()
     return UndoResult("done", op)
 
 
@@ -240,4 +240,3 @@ async def set_view_pref(session: AsyncSession, owner_id: int, sort: str, page: i
     else:
         p.sort = sort
         p.page = page
-    await session.commit()

@@ -1,0 +1,82 @@
+"""DI-контейнер (dishka): приложение и область запроса.
+
+Единица работы: одна область запроса = одна транзакция. Сессию отдаёт
+request-скоуп провайдер, но КОММИТИТ её не он, а DbSessionMiddleware — внутри
+пер-пользовательского замка. Это осознанное расхождение с chain-health: там
+коммит живёт в провайдере, но там нет замка. У нас замок обязан накрывать
+коммит: уехав в закрытие скоупа, коммит оказался бы за пределами замка, и
+второй апдейт того же пользователя (двойной тап) успевал бы прочитать старый
+баланс до фиксации первого — классический lost update.
+
+Провайдер остаётся страховкой: откат при исключении, чтобы недописанный хвост
+не утёк, каким бы путём ни умер обработчик.
+"""
+
+from collections.abc import AsyncIterable
+
+from aiogram.fsm.storage.base import BaseStorage
+from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from .config import Config
+from .db import create_db
+from .storage import SqlAlchemyStorage
+
+
+class AppProvider(Provider):
+    scope = Scope.APP
+
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self._config = config
+
+    @provide
+    def config(self) -> Config:
+        return self._config
+
+    @provide
+    def db(self, config: Config) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+        return create_db(config.db_url)
+
+    @provide
+    def engine(self, db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]]) -> AsyncEngine:
+        return db[0]
+
+    @provide
+    def sessionmaker(
+        self, db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]]
+    ) -> async_sessionmaker[AsyncSession]:
+        return db[1]
+
+
+class RequestProvider(Provider):
+    scope = Scope.REQUEST
+
+    @provide
+    async def session(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> AsyncIterable[AsyncSession]:
+        """Сессия на область запроса. Без коммита — его делает middleware.
+
+        dishka финализирует генераторы через asend: исключение обработчика
+        приходит как ЗНАЧЕНИЕ yield, а не бросается внутрь. try/except вокруг
+        yield его бы не увидел.
+        """
+        async with session_factory() as session:
+            exception = yield session
+            if exception is not None:
+                await session.rollback()
+
+    @provide
+    def fsm_storage(self, session: AsyncSession) -> BaseStorage:
+        """FSM-хранилище поверх ТОЙ ЖЕ сессии, что и бизнес-логика.
+
+        Единственный писатель в SQLite на весь апдейт — ради этого затевался
+        переезд: 07.08.2026 отдельная FSM-сессия упёрлась в блокировку записи
+        сессии запроса, и бот лёг с «database is locked».
+        """
+        return SqlAlchemyStorage(session)
+
+
+def build_container(config: Config) -> AsyncContainer:
+    return make_async_container(AppProvider(config), RequestProvider())

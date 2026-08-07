@@ -14,14 +14,15 @@ from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import ErrorEvent
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from dishka import AsyncContainer
+from dishka.integrations.aiogram import ContainerMiddleware
 
 from .admin import router as admin_router
 from .config import ROOT, load_config
-from .db import create_db
+from .di import build_container
 from .handlers import router
-from .middlewares import AccessMiddleware, DbSessionMiddleware
-from .storage import SqlAlchemyStorage
+from .middlewares import AccessMiddleware, DbSessionMiddleware, FsmSessionMiddleware
+from .storage import ReadOnlyFsmView
 from .watchdog import run_watchdog, sd_notify
 
 _ERROR_TEXT = "⚠️ Не получилось выполнить действие. Попробуйте ещё раз."
@@ -137,9 +138,7 @@ def _run_migrations(db_url: str) -> None:
     command.upgrade(cfg, "head")
 
 
-def build_dispatcher(
-    sessionmaker: async_sessionmaker[AsyncSession], admin_ids: frozenset[int]
-) -> Dispatcher:
+def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Dispatcher:
     """Собирает диспетчер в том единственном порядке, который имеет значение.
 
     Отдельная функция, а не тело main(), потому что этим же путём диспетчер
@@ -147,13 +146,28 @@ def build_dispatcher(
     разойтись с продом. Раньше шва не было, и тесты дёргали middleware в
     вакууме — из-за чего пропустили взаимную блокировку сессии запроса и
     FSM-хранилища, положившую бота в проде.
+
+    ContainerMiddleware зарегистрирован вручную и ТОЛЬКО на dp.update —
+    сознательно вместо setup_dishka. Тот вешает middleware на все обсерверы,
+    и один апдейт открывал бы ДВА независимых REQUEST-скоупа (update- и
+    message-уровня) с двумя разными сессиями — второй писатель, от которого
+    мы только что избавились, вернулся бы через чёрный ход. Проверено по
+    исходникам dishka 1.10.1 (integrations/aiogram.py: цикл по всем
+    router.observers). auto_inject не используется: обработчики берут session
+    из data, FromDishka-инъекций в них нет.
     """
-    dp = Dispatcher(storage=SqlAlchemyStorage(sessionmaker))
+    # Хранилище диспетчера — только чтение (raw_state для фильтров): встроенный
+    # FSMContextMiddleware aiogram читает его ДО открытия области запроса.
+    dp = Dispatcher(storage=ReadOnlyFsmView(container))
     # admin_ids кладём в workflow-данные — aiogram отдаст их обработчикам,
     # объявившим одноимённый параметр.
     dp["admin_ids"] = admin_ids
 
-    dp.update.middleware(DbSessionMiddleware(sessionmaker))
+    dp.update.outer_middleware(ContainerMiddleware(container))
+    dp.update.middleware(DbSessionMiddleware())
+    # После DbSessionMiddleware: хранилище должно получить ту же сессию из
+    # кэша области запроса.
+    dp.update.middleware(FsmSessionMiddleware())
     # Строго после сессии: AccessMiddleware читает allowed_users из data["session"].
     dp.update.middleware(AccessMiddleware(admin_ids))
 
@@ -172,12 +186,12 @@ async def _run_bot() -> None:
     _lock = _acquire_single_instance_lock()  # держим ссылку до конца процесса
     cfg = load_config()
 
-    _engine, sessionmaker = create_db(cfg.db_url)
+    container = build_container(cfg)
 
     session = AiohttpSession(proxy=cfg.proxy, timeout=_SESSION_TIMEOUT)
     bot = Bot(token=cfg.token, session=session)
 
-    dp = build_dispatcher(sessionmaker, cfg.admin_ids)
+    dp = build_dispatcher(container, cfg.admin_ids)
 
     if not cfg.admin_ids:
         logging.warning(
@@ -202,6 +216,7 @@ async def _run_bot() -> None:
         )
     finally:
         watchdog.cancel()
+        await container.close()
 
 
 def main() -> None:
