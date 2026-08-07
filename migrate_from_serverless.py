@@ -1,11 +1,11 @@
-"""Разовый перенос данных из serverless-БД (Node/SQLite) в selfhosted (SQLAlchemy).
+"""Разовый перенос данных из serverless-БД (Node/SQLite) в self-hosted-версию (SQLAlchemy).
 
 Схемы совместимы по именам колонок; отличия, которые учитываем:
 - snapshot_before в serverless хранит ключи в camelCase → приводим к snake_case,
   иначе отмена перенесённых операций не восстановит поля (restore() по атрибутам);
 - undone 0/1 → bool.
 
-Запуск (из каталога selfhosted/, с активированным .venv):
+Запуск (из корня репозитория, с активированным .venv):
     python migrate_from_serverless.py
 Идемпотентность: если целевая БД уже содержит учеников — миграция отменяется.
 """
@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent
 OLD_DB = ROOT.parent / "serverless" / "local" / "data.sqlite"
 NEW_URL = f"sqlite+aiosqlite:///{ROOT / 'data.sqlite'}"
 
-# camelCase (serverless) → snake_case (атрибуты модели selfhosted)
+# camelCase (serverless) → snake_case (атрибуты модели self-hosted)
 KEY_MAP = {
     "ownerId": "owner_id",
     "nameLower": "name_lower",

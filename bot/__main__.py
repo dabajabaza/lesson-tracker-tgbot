@@ -1,4 +1,4 @@
-"""Точка входа: long polling. Запуск: python -m bot (из каталога selfhosted/)."""
+"""Точка входа: long polling. Запуск: python -m bot (из корня репозитория)."""
 
 import asyncio
 import fcntl

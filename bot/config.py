@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent  # каталог selfhosted/
+ROOT = Path(__file__).resolve().parent.parent  # корень репозитория
 
 
 @dataclass
@@ -31,7 +31,7 @@ def _read_token() -> str:
     if token_file.exists():
         return token_file.read_text(encoding="utf-8").strip()
     raise RuntimeError(
-        "Нет токена: задайте BOT_TOKEN или положите его в selfhosted/.bot-token"
+        "Нет токена: задайте BOT_TOKEN или положите его в .bot-token в корне репозитория"
     )
 
 

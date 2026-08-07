@@ -2,7 +2,7 @@
 # ВНИМАНИЕ: не запускать одновременно с serverless-ботом (lesson-tracker-bot) —
 # два процесса конфликтуют за getUpdates (Telegram 409). Это замена, не дополнение.
 #
-# Установка (из каталога selfhosted/, после подготовки .venv и токена):
+# Установка (из корня репозитория, после подготовки .venv и токена):
 #   systemctl --user disable --now lesson-tracker-bot
 #   cp lesson-tracker-selfhosted.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
@@ -25,8 +25,8 @@ StartLimitBurst=60
 # после смены сети / провала прокси) — systemd убивает и перезапускает.
 Type=notify
 WatchdogSec=90
-WorkingDirectory=%h/Projects/lesson_tracker_tg_bot/selfhosted
-ExecStart=%h/Projects/lesson_tracker_tg_bot/selfhosted/.venv/bin/python -m bot
+WorkingDirectory=%h/Projects/lesson_tracker_tg_bot
+ExecStart=%h/Projects/lesson_tracker_tg_bot/.venv/bin/python -m bot
 # Прямой доступ к api.telegram.org в этой сети режется — ходим через прокси.
 Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
 # Restart=always покрывает и штатный выход, и срабатывание watchdog.

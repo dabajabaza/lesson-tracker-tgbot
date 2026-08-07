@@ -1,10 +1,3 @@
-# Общий gitignore монорепо. Специфика serverless/ и selfhosted/ — в их
-# собственных .gitignore.
-
-# Node
-node_modules/
-npm-debug.log*
-
 # Python
 __pycache__/
 *.py[cod]
@@ -15,9 +8,7 @@ venv/
 
 # Секреты и локальные данные
 .bot-token
+.env
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-
-# Машинно-специфичное
-.npmrc
