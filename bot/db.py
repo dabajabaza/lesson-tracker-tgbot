@@ -29,6 +29,12 @@ def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession
 
 
 async def init_models(engine: AsyncEngine) -> None:
-    """Создаёт таблицы, которых ещё нет (простая авто-миграция для SQLite)."""
+    """Создаёт таблицы через метаданные.
+
+    Бот этим больше НЕ пользуется: схему приводит к голове alembic при старте.
+    Осталось только ради разового `migrate_from_serverless.py` (выполнен при
+    переезде 2026-07-21). Не звать из нового кода — create_all рядом с
+    миграциями и есть тот самый дрейф схемы, который потом ищут часами.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
