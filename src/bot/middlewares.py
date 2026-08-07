@@ -14,12 +14,14 @@ locked» на повышении блокировки — операция те�
 делает такую гонку невозможной внутри процесса; `BEGIN IMMEDIATE` (см. db.py)
 остаётся страховкой на внешнего писателя — миграцию, ручной скрипт.
 
-Ответ пользователю уходит ДО коммита — сознательный разворот старого принципа
-«коммит до отправки». Старый порядок при сбое отправки давал дубль оплаты:
-запись уже есть, пользователь видит ошибку и вводит сумму снова. Новый при
-сбое отправки откатывает всё разом (повтор безопасен), а теряет данные только
-при отказе самого коммита — на локальном SQLite это умерший диск, не рабочий
-режим. Для денег дубль хуже потери.
+Порядок внутри апдейта: обработчик → коммит → отправка. Обработчики не ходят в
+сеть сами, они складывают намерения в Responder (см. ui.py), и сеть случается
+после закрытия транзакции, за пределами замка.
+
+Ради этого разворота всё и затевалось. Пока отправка стояла внутри транзакции,
+блокировка записи держалась весь круг до Telegram и обратно — сотни
+миллисекунд, — и бот упирался в единицы апдейтов в секунду независимо от того,
+сколько их приходит. Теперь замок держится ровно на время работы с базой.
 """
 
 import asyncio
@@ -34,10 +36,12 @@ from aiogram.fsm.storage.base import BaseStorage
 from aiogram.types import Message, TelegramObject
 from dishka import AsyncContainer
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import access
 from .models import ProcessedUpdate, now_ts
+from .storage import SqlAlchemyStorage
+from .ui import Responder
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +74,7 @@ class DbSessionMiddleware(BaseMiddleware):
             delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - _MARK_TTL)
         )
 
-    async def _run(self, handler, event, data):
+    async def _run(self, handler, event, data, ui: Responder):
         container: AsyncContainer = data["dishka_container"]
         session = await container.get(AsyncSession)
         data["session"] = session
@@ -97,12 +101,34 @@ class DbSessionMiddleware(BaseMiddleware):
         except Exception:
             # Откат здесь, а не только в провайдере: обработчик ошибок aiogram
             # живёт снаружи скоупа и успел бы отправить «попробуйте ещё раз»
-            # раньше, чем провайдер откатил бы хвост.
+            # раньше, чем провайдер откатил бы хвост. Заодно выбрасываем
+            # накопленные намерения: апдейт не состоялся, говорить не о чем.
             await session.rollback()
+            ui.discard()
             raise
         await self._prune(session)
         await session.commit()
         return result
+
+    async def _store_prompts(self, container: AsyncContainer, ui: Responder) -> None:
+        """Дописать id только что отправленных подсказок в состояние FSM.
+
+        Второй короткой транзакцией, потому что id сообщения существует лишь
+        после отправки, а отправка теперь идёт после коммита. Две транзакции по
+        миллисекунде вместо одной на весь круг до Telegram — ровно тот размен,
+        ради которого затевался разворот порядка.
+
+        Потеря этой записи (смерть процесса в узком окне между отправкой и
+        второй транзакцией) стоит одной невынесенной подсказки в чате:
+        удаление и так делается «по возможности».
+        """
+        factory = await container.get(async_sessionmaker[AsyncSession])
+        async with self._lock, factory() as session:
+            storage = SqlAlchemyStorage(session)
+            for key, message_id in ui.prompt_updates:
+                await FSMContext(storage=storage, key=key).update_data(prompt_id=message_id)
+            await session.commit()
+        ui.prompt_updates.clear()
 
     async def __call__(
         self,
@@ -110,11 +136,21 @@ class DbSessionMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        container: AsyncContainer = data["dishka_container"]
+        ui = await container.get(Responder)
+
         # aiogram обрабатывает апдейты конкурентно, а писатель в SQLite один.
         # Замок берётся на любой апдейт без исключений: отметка идемпотентности
         # ставится даже там, где нет event_from_user, то есть пишут все.
         async with self._lock:
-            return await self._run(handler, event, data)
+            result = await self._run(handler, event, data, ui)
+
+        # Сеть — уже вне замка и вне транзакции. Пока эти вызовы идут, база
+        # свободна и следующий апдейт обрабатывается, а не ждёт.
+        await ui.flush(data["bot"])
+        if ui.prompt_updates:
+            await self._store_prompts(container, ui)
+        return result
 
 
 class FsmSessionMiddleware(BaseMiddleware):

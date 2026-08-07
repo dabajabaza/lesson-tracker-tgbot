@@ -1,13 +1,10 @@
-"""Общее для обработчиков: разбор callback_data, владелец, меню, правка сообщения.
+"""Общее для обработчиков: разбор callback_data, владелец, меню.
 
 Формат callback_data намеренно оставлен строковым («card:5», «list:due:0»), а не
 переведён на CallbackData-фабрики: в чатах живут сообщения со старыми кнопками,
 и смена формата превратила бы их все в «Кнопка устарела».
 """
 
-import contextlib
-
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
 from ..money import MAX_MONEY, format_money
@@ -56,16 +53,6 @@ def message_of(cb: CallbackQuery) -> Message | None:
     return cb.message if isinstance(cb.message, Message) else None
 
 
-async def edit(msg: Message, text: str, kb) -> None:
-    """Правка сообщения, терпимая к повторному нажатию той же кнопки."""
-    try:
-        await msg.edit_text(text, reply_markup=kb)
-    except TelegramBadRequest as e:
-        if "not modified" in str(e).lower():
-            return  # ничего не поменялось — Telegram против, и он прав
-        raise
-
-
 async def menu(students: StudentService, prefs: ViewPrefService, owner_id: int):
     """Главное меню с учётом сохранённой сортировки/страницы пользователя."""
     sort, page = await prefs.get(owner_id)
@@ -83,11 +70,3 @@ def money_error(kind: str, error: str, example: str) -> str:
     if error == "zero":
         return f"⚠️ {noun} должна быть больше нуля. Введите число, например: {example}"
     return f"⚠️ Это не похоже на {acc}. Введите число в рублях, например: {example}"
-
-
-async def delete_quietly(bot, chat_id: int, message_id: int | None) -> None:
-    if not message_id:
-        return
-    # Удаление косметическое: сообщение уже удалено / сеть — не критично.
-    with contextlib.suppress(TelegramAPIError):
-        await bot.delete_message(chat_id, message_id)

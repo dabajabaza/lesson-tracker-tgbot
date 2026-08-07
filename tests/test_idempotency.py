@@ -11,9 +11,12 @@ Telegram подтверждает апдейт только следующим �
 не увидели — здесь всё идёт через настоящий диспетчер.
 """
 
+from unittest.mock import patch
+
 from sqlalchemy import select
 
 from bot.models import ProcessedUpdate, Student
+from bot.services import StudentService
 from tests.bot_harness import make_update_message
 
 ADMIN = 1
@@ -75,17 +78,20 @@ async def test_повтор_не_даёт_второго_ответа(harness):
     assert len(harness.session.sent_texts()) == after_first
 
 
-async def test_упавший_апдейт_не_отмечается_и_повторяется(harness, sessionmaker):
+async def test_упавший_обработчик_не_отмечается_и_повторяется(harness, sessionmaker):
     """Отметка живёт в одной транзакции с изменением: откатилось изменение —
     откатилась и она. Иначе потерянный апдейт числился бы применённым, и
-    повторить его было бы уже нельзя."""
+    повторить его было бы уже нельзя.
+
+    Роняем сохранение, а не отправку: отправка теперь идёт ПОСЛЕ коммита
+    (см. middlewares.py) и на судьбу транзакции влиять не может.
+    """
     await harness.click("add", user_id=ADMIN)
     await harness.send("Лера", user_id=ADMIN)
 
     update = make_update_message("1600", user_id=ADMIN, update_id=555)
-    harness.session.fail_on["SendMessage"] = RuntimeError("сеть упала")
-    await harness.dp.feed_update(harness.bot, update)
-    del harness.session.fail_on["SendMessage"]
+    with patch.object(StudentService, "create", side_effect=RuntimeError("диск отвалился")):
+        await harness.dp.feed_update(harness.bot, update)
 
     assert await _students(sessionmaker) == []
     assert 555 not in await _marks(sessionmaker), "неприменённый апдейт отмечать нельзя"

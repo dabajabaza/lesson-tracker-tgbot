@@ -13,11 +13,13 @@ from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
+from dishka import FromDishka
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import access
 from .models import AllowedUser, Invite, now_ts
+from .ui import Responder
 
 log = logging.getLogger(__name__)
 
@@ -35,20 +37,26 @@ def _is_admin(message: Message, admin_ids: frozenset[int]) -> bool:
 
 
 @router.message(Command("invite"))
-async def cmd_invite(message: Message, session: AsyncSession, admin_ids: frozenset[int]) -> None:
+async def cmd_invite(
+    message: Message,
+    session: AsyncSession,
+    admin_ids: frozenset[int],
+    ui: FromDishka[Responder],
+) -> None:
     if not _is_admin(message, admin_ids):
         return
     assert message.from_user is not None and message.bot is not None
 
     invite = await access.create_invite(session, message.from_user.id)
-    # Коммитит DbSessionMiddleware в конце апдейта. Ссылка уйдёт до фиксации:
-    # если коммит вдруг упадёт, ссылка окажется битой — переживаемо, /invite
-    # выпускается повторно.
 
-    me = await message.bot.get_me()
+    # bot.me(), а не bot.get_me(): результат закэширован ещё на старте
+    # (__main__._establish_connection), так что сети здесь нет — а она была бы
+    # внутри транзакции и держала бы блокировку записи.
+    me = await message.bot.me()
     link = f"https://t.me/{me.username}?start={invite.code}"
     hours = access.INVITE_TTL_SECONDS // 3600
-    await message.answer(
+    ui.answer(
+        message,
         f"Одноразовая ссылка (действует {hours} ч):\n\n"
         f"<code>{link}</code>\n\n"
         "Перешедший по ней получит доступ к боту со своими, отдельными данными.",
@@ -63,6 +71,7 @@ async def cmd_allow(
     command: CommandObject,
     session: AsyncSession,
     admin_ids: frozenset[int],
+    ui: FromDishka[Responder],
 ) -> None:
     if not _is_admin(message, admin_ids):
         return
@@ -72,17 +81,22 @@ async def cmd_allow(
     # isdecimal, а не isdigit: последний истинен для символов вроде "³",
     # на которых int() потом падает.
     if not args.isdecimal():
-        await message.answer(_ALLOW_USAGE, parse_mode="HTML")
+        ui.answer(message, _ALLOW_USAGE, parse_mode="HTML")
         return
 
     user_id = int(args)
     await access.allow_user(session, user_id, invited_by=message.from_user.id)
-    await message.answer(f"Пользователь <code>{user_id}</code> допущен.", parse_mode="HTML")
+    ui.answer(message, f"Пользователь <code>{user_id}</code> допущен.", parse_mode="HTML")
     log.info("Доступ выдан вручную: admin=%s user_id=%s", message.from_user.id, user_id)
 
 
 @router.message(Command("access"))
-async def cmd_access(message: Message, session: AsyncSession, admin_ids: frozenset[int]) -> None:
+async def cmd_access(
+    message: Message,
+    session: AsyncSession,
+    admin_ids: frozenset[int],
+    ui: FromDishka[Responder],
+) -> None:
     """Показать, кто допущен и какие приглашения ещё не погашены."""
     if not _is_admin(message, admin_ids):
         return
@@ -104,4 +118,4 @@ async def cmd_access(message: Message, session: AsyncSession, admin_ids: frozens
         lines.append("\n<b>Допущены</b>: никого (кроме админов)")
     lines.append(f"\n<b>Непогашенных приглашений</b>: {len(live)}")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    ui.answer(message, "\n".join(lines), parse_mode="HTML")
