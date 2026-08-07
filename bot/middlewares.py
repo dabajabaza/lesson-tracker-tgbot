@@ -5,36 +5,82 @@
 
 Пер-пользовательский Lock: aiogram обрабатывает апдейты конкурентно, поэтому
 двойной тап (например «Списать урок») мог бы дать потерянное обновление баланса
-(read-modify-write без блокировки). Lock сериализует всё по владельцу."""
+(read-modify-write без блокировки). Lock сериализует всё по владельцу.
+
+Идемпотентность: Telegram повторяет апдейт, если процесс умер до подтверждения
+offset (подтверждение уходит только со следующим getUpdates). Защита — отметка
+update_id, которая ложится в ту же транзакцию, что и бизнес-изменение."""
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import access
+from .models import ProcessedUpdate
 
 log = logging.getLogger(__name__)
+
+# Telegram держит неподтверждённые апдейты сутки, так что недели отметок с запасом
+# хватает, а таблица не растёт бесконечно.
+_MARK_TTL = 7 * 24 * 3600
+_PRUNE_EVERY = 3600
 
 
 class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]):
         self.sessionmaker = sessionmaker
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._pruned_at = 0.0
+
+    async def _prune(self) -> None:
+        """Чистка старых отметок. Отдельной сессией — чтобы DELETE ни при каком
+        исходе не попал в транзакцию с бизнес-изменением и не смешался с откатом."""
+        if time.monotonic() - self._pruned_at < _PRUNE_EVERY:
+            return
+        self._pruned_at = time.monotonic()
+        async with self.sessionmaker() as session:
+            await session.execute(
+                delete(ProcessedUpdate).where(ProcessedUpdate.created_at < int(time.time()) - _MARK_TTL)
+            )
+            await session.commit()
 
     async def _run(self, handler, event, data):
         async with self.sessionmaker() as session:
             data["session"] = session
+
+            # Middleware висит на dp.update, поэтому event — это сам Update.
+            # getattr, а не прямое обращение: в тестах сюда прилетают и голые
+            # объекты сообщений, у которых update_id нет.
+            update_id = getattr(event, "update_id", None)
+            if update_id is not None:
+                seen = await session.scalar(
+                    select(ProcessedUpdate.update_id).where(ProcessedUpdate.update_id == update_id)
+                )
+                if seen is not None:
+                    log.warning("Апдейт %s уже применён — повтор отброшен", update_id)
+                    return None
+                # Только add: коммитить здесь НЕЛЬЗЯ. Отдельный коммит отметил бы
+                # апдейт обработанным до того, как случилось само изменение, и
+                # смерть процесса в этот промежуток превратила бы риск дубля в
+                # риск потери. Строку зафиксирует общий commit из repo — вместе
+                # с бизнес-изменением, одной транзакцией.
+                session.add(ProcessedUpdate(update_id=update_id))
+
             try:
-                return await handler(event, data)
+                result = await handler(event, data)
             except Exception:
                 await session.rollback()  # откатить незакоммиченный хвост
                 raise
+        await self._prune()
+        return result
 
     async def __call__(
         self,
