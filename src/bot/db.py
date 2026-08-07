@@ -35,8 +35,19 @@ def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession
 
         @event.listens_for(engine.sync_engine, "begin")
         def _sqlite_begin(conn):  # noqa: ANN001
-            # Раз драйвер больше не начинает транзакции сам, начинаем явно.
-            conn.exec_driver_sql("BEGIN")
+            # Раз драйвер больше не начинает транзакции сам, начинаем явно —
+            # и сразу IMMEDIATE, то есть забирая блокировку записи на входе.
+            #
+            # Обычный BEGIN (DEFERRED) берёт её только на первой записи, уже
+            # прочитав данные. Два таких писателя читают общий снимок, и второй
+            # получает не ожидание, а мгновенный «database is locked»: ждать
+            # нечего, его снимок устарел, busy_timeout тут не помогает вовсе.
+            # С IMMEDIATE опоздавший честно ждёт на busy_timeout.
+            #
+            # Внутри процесса до этого не доходит — пишущие апдейты сериализует
+            # замок в DbSessionMiddleware. IMMEDIATE прикрывает писателя со
+            # стороны: миграцию на старте, ручной скрипт над боевой базой.
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
 
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     return engine, sessionmaker

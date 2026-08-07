@@ -1,10 +1,18 @@
-"""Middleware: единица работы + сериализация апдейтов одного пользователя.
+"""Middleware: единица работы + сериализация пишущих апдейтов.
 
 Одна область запроса = одна транзакция. Сессию отдаёт dishka (см. di.py),
 функции repo НЕ коммитят — фиксирует DbSessionMiddleware, причём внутри
-пер-пользовательского замка. Замок обязан накрывать коммит: уехав в закрытие
-скоупа, коммит оказался бы за пределами замка, и второй апдейт того же
-пользователя (двойной тап) читал бы старый баланс до фиксации первого.
+замка. Замок обязан накрывать коммит: уехав в закрытие скоупа, коммит оказался
+бы за его пределами, и следующий апдейт читал бы старый баланс до фиксации
+предыдущего.
+
+Замок один на приложение, а не по пользователю. Пер-пользовательский замок
+сериализовал только апдейты одного владельца, а SQLite допускает одного писателя
+на всю базу: два владельца, нажавшие кнопку одновременно, открывали DEFERRED-
+транзакции поверх общего снимка, и второй получал мгновенный «database is
+locked» на повышении блокировки — операция терялась молча. Глобальный замок
+делает такую гонку невозможной внутри процесса; `BEGIN IMMEDIATE` (см. db.py)
+остаётся страховкой на внешнего писателя — миграцию, ручной скрипт.
 
 Ответ пользователю уходит ДО коммита — сознательный разворот старого принципа
 «коммит до отправки». Старый порядок при сбое отправки давал дубль оплаты:
@@ -17,7 +25,6 @@
 import asyncio
 import logging
 import time
-from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -47,7 +54,7 @@ class DbSessionMiddleware(BaseMiddleware):
     """
 
     def __init__(self) -> None:
-        self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._lock = asyncio.Lock()
         self._pruned_at = 0.0
 
     async def _prune(self, session: AsyncSession) -> None:
@@ -103,12 +110,10 @@ class DbSessionMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        user = data.get("event_from_user")
-        if user is None:
-            return await self._run(handler, event, data)
-        # aiogram обрабатывает апдейты конкурентно; замок сериализует
-        # read-modify-write одного пользователя (двойной тап по «Списать урок»).
-        async with self._locks[user.id]:
+        # aiogram обрабатывает апдейты конкурентно, а писатель в SQLite один.
+        # Замок берётся на любой апдейт без исключений: отметка идемпотентности
+        # ставится даже там, где нет event_from_user, то есть пишут все.
+        async with self._lock:
             return await self._run(handler, event, data)
 
 
