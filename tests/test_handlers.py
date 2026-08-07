@@ -1,122 +1,100 @@
-"""Тесты на уровне обработчиков: межтенантная изоляция в on_callback,
-устойчивость к подделанной callback_data, сохранение сортировки,
-персистентность FSM-состояния."""
+"""Тесты обработчиков: межтенантная изоляция, подделанная callback_data,
+сохранение сортировки, персистентность FSM-состояния.
 
-from types import SimpleNamespace
+Прогон идёт через настоящий диспетчер (harness), а не вызовом on_callback с
+самодельными объектами: подделки в вакууме не проходят isinstance-гарды
+обработчика и не видят middleware. Так эти тесты однажды пропустили взаимную
+блокировку сессий — больше им это не светит.
+"""
 
-from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot import repo
-from bot.handlers import on_callback
 from bot.storage import SqlAlchemyStorage
 
-A, B = 111, 222
+A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS (см. conftest)
 
 
-class FakeBot:
-    async def delete_message(self, chat_id, message_id):
-        pass
+def _last_edit(harness) -> str:
+    edits = harness.session.calls_of("EditMessageText")
+    assert edits, "обработчик должен был отредактировать сообщение"
+    return edits[-1].text
 
 
-class FakeMessage:
-    def __init__(self, chat_id, message_id=100):
-        self.chat = SimpleNamespace(id=chat_id, type="private")
-        self.message_id = message_id
-        self.bot = FakeBot()
-        self.edits: list = []
-        self.answers: list = []
-
-    async def edit_text(self, text, reply_markup=None):
-        self.edits.append((text, reply_markup))
-
-    async def answer(self, text, reply_markup=None):
-        self.answers.append((text, reply_markup))
-        return SimpleNamespace(message_id=999)
-
-
-class FakeCallback:
-    def __init__(self, uid, data, message):
-        self.from_user = SimpleNamespace(id=uid)
-        self.data = data
-        self.message = message
-        self.id = "q1"
-        self.answers: list = []
-
-    async def answer(self, text=None, show_alert=False):
-        self.answers.append((text, show_alert))
-
-
-def _state(uid):
-    return FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=uid, user_id=uid))
-
-
-async def _run(session, uid, data):
-    msg = FakeMessage(chat_id=uid)
-    cb = FakeCallback(uid, data, msg)
-    await on_callback(cb, session, _state(uid))
-    return cb, msg
+def _last_answer(harness) -> str:
+    answers = harness.session.calls_of("AnswerCallbackQuery")
+    assert answers, "обработчик должен был ответить на колбэк"
+    return answers[-1].text or ""
 
 
 # ---------- межтенантная изоляция ----------
 
-async def test_foreign_card_not_visible(session):
+
+async def test_foreign_card_not_visible(harness, session):
     a = await repo.create_student(session, A, "Аня", 160000)
-    _cb, msg = await _run(session, B, f"card:{a.id}")
-    assert msg.edits and "не найден" in msg.edits[-1][0].lower()
+    await harness.click(f"card:{a.id}", user_id=B)
+    assert "не найден" in _last_edit(harness).lower()
 
 
-async def test_foreign_charge_rejected(session):
+async def test_foreign_charge_rejected(harness, session):
     a = await repo.create_student(session, A, "Аня", 160000)
-    cb, _msg = await _run(session, B, f"charge:{a.id}")
-    assert cb.answers and "не найден" in (cb.answers[-1][0] or "").lower()
+    await harness.click(f"charge:{a.id}", user_id=B)
+    assert "не найден" in _last_answer(harness).lower()
     fresh = await repo.get_student(session, A, a.id)
     assert fresh.balance == 0  # чужое списание не применилось
 
 
-async def test_foreign_payment_rejected(session):
+async def test_foreign_payment_rejected(harness, session):
     a = await repo.create_student(session, A, "Аня", 160000)
-    cb, _msg = await _run(session, B, f"pay:{a.id}")
-    assert cb.answers and "не найден" in (cb.answers[-1][0] or "").lower()
+    await harness.click(f"pay:{a.id}", user_id=B)
+    assert "не найден" in _last_answer(harness).lower()
 
 
-async def test_foreign_undo_sees_nothing(session):
+async def test_foreign_undo_sees_nothing(harness, session):
     a = await repo.create_student(session, A, "Аня", 160000)
     await repo.apply_payment(session, A, a.id, 160000)
-    cb, _msg = await _run(session, B, "undo")
-    assert cb.answers and "отменять нечего" in (cb.answers[-1][0] or "").lower()
+    await harness.click("undo", user_id=B)
+    assert "отменять нечего" in _last_answer(harness).lower()
 
 
 # ---------- владелец: действие проходит ----------
 
-async def test_owner_charge_applies(session):
+
+async def test_owner_charge_applies(harness, session, sessionmaker):
     a = await repo.create_student(session, A, "Аня", 160000)
-    _cb, msg = await _run(session, A, f"charge:{a.id}")
-    fresh = await repo.get_student(session, A, a.id)
-    assert fresh.balance == -1 and msg.edits
+    await harness.click(f"charge:{a.id}", user_id=A)
+    # Обработчик коммитил в собственной сессии; читаем свежей, а не протухшим
+    # кэшем этой (expire_all в async-сессии кончается MissingGreenlet на
+    # ленивой перезагрузке).
+    async with sessionmaker() as check:
+        fresh = await repo.get_student(check, A, a.id)
+    assert fresh.balance == -1
+    assert harness.session.calls_of("EditMessageText")
 
 
 # ---------- подделанная callback_data не роняет обработчик ----------
 
-async def test_malformed_callback_data(session):
+
+async def test_malformed_callback_data(harness):
     for data in ("card:abc", "charge:", "pay:xx"):
-        cb, _msg = await _run(session, A, data)
-        assert cb.answers and "устарел" in (cb.answers[-1][0] or "").lower()
+        await harness.click(data, user_id=A)
+        assert "устарел" in _last_answer(harness).lower()
 
 
 # ---------- сохранение сортировки при возврате к списку ----------
 
-async def test_sort_preserved_on_home(session):
+
+async def test_sort_preserved_on_home(harness, session):
     await repo.create_student(session, A, "Борис", 200000)
     anya = await repo.create_student(session, A, "Аня", 160000)
     await repo.apply_payment(session, A, anya.id, 800000)  # Аня: +5
-    await _run(session, A, "list:due:0")           # выбрали «скоро оплата»
-    _cb, msg = await _run(session, A, "home")       # вернулись к списку
-    assert "скоро оплата" in msg.edits[-1][0]
+    await harness.click("list:due:0", user_id=A)  # выбрали «скоро оплата»
+    await harness.click("home", user_id=A)  # вернулись к списку
+    assert "скоро оплата" in _last_edit(harness)
 
 
 # ---------- персистентность FSM (переживает «рестарт») ----------
+
 
 async def test_persistent_fsm_storage(sessionmaker):
     st = SqlAlchemyStorage(sessionmaker)

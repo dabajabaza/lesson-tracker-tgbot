@@ -35,79 +35,85 @@ def upgrade() -> None:
         # ревизию применённой (это делает сам alembic после выхода отсюда).
         return
 
-    op.create_table('allowed_users',
-    sa.Column('user_id', sa.BigInteger(), nullable=False),
-    sa.Column('username', sa.String(), nullable=True),
-    sa.Column('created_at', sa.BigInteger(), nullable=False),
-    sa.Column('invited_by', sa.BigInteger(), nullable=True),
-    sa.PrimaryKeyConstraint('user_id')
+    op.create_table(
+        "allowed_users",
+        sa.Column("user_id", sa.BigInteger(), nullable=False),
+        sa.Column("username", sa.String(), nullable=True),
+        sa.Column("created_at", sa.BigInteger(), nullable=False),
+        sa.Column("invited_by", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("user_id"),
     )
-    op.create_table('fsm',
-    sa.Column('key', sa.String(), nullable=False),
-    sa.Column('state', sa.String(), nullable=True),
-    sa.Column('data', sa.JSON(), nullable=False),
-    sa.PrimaryKeyConstraint('key')
+    op.create_table(
+        "fsm",
+        sa.Column("key", sa.String(), nullable=False),
+        sa.Column("state", sa.String(), nullable=True),
+        sa.Column("data", sa.JSON(), nullable=False),
+        sa.PrimaryKeyConstraint("key"),
     )
-    op.create_table('invites',
-    sa.Column('code', sa.String(), nullable=False),
-    sa.Column('created_by', sa.BigInteger(), nullable=False),
-    sa.Column('created_at', sa.BigInteger(), nullable=False),
-    sa.Column('expires_at', sa.BigInteger(), nullable=False),
-    sa.Column('used_by', sa.BigInteger(), nullable=True),
-    sa.Column('used_at', sa.BigInteger(), nullable=True),
-    sa.PrimaryKeyConstraint('code')
+    op.create_table(
+        "invites",
+        sa.Column("code", sa.String(), nullable=False),
+        sa.Column("created_by", sa.BigInteger(), nullable=False),
+        sa.Column("created_at", sa.BigInteger(), nullable=False),
+        sa.Column("expires_at", sa.BigInteger(), nullable=False),
+        sa.Column("used_by", sa.BigInteger(), nullable=True),
+        sa.Column("used_at", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("code"),
     )
-    op.create_table('operations',
-    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-    sa.Column('owner_id', sa.BigInteger(), nullable=False),
-    sa.Column('student_id', sa.Integer(), nullable=False),
-    sa.Column('type', sa.String(), nullable=False),
-    sa.Column('amount', sa.BigInteger(), nullable=True),
-    sa.Column('lessons_delta', sa.Integer(), nullable=False),
-    sa.Column('balance_after', sa.Integer(), nullable=False),
-    sa.Column('remainder_after', sa.BigInteger(), nullable=False),
-    sa.Column('new_price', sa.BigInteger(), nullable=True),
-    sa.Column('snapshot_before', sa.JSON(), nullable=False),
-    sa.Column('undone', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.BigInteger(), nullable=False),
-    sa.PrimaryKeyConstraint('id')
+    op.create_table(
+        "operations",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("owner_id", sa.BigInteger(), nullable=False),
+        sa.Column("student_id", sa.Integer(), nullable=False),
+        sa.Column("type", sa.String(), nullable=False),
+        sa.Column("amount", sa.BigInteger(), nullable=True),
+        sa.Column("lessons_delta", sa.Integer(), nullable=False),
+        sa.Column("balance_after", sa.Integer(), nullable=False),
+        sa.Column("remainder_after", sa.BigInteger(), nullable=False),
+        sa.Column("new_price", sa.BigInteger(), nullable=True),
+        sa.Column("snapshot_before", sa.JSON(), nullable=False),
+        sa.Column("undone", sa.Boolean(), nullable=False),
+        sa.Column("created_at", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
     )
-    with op.batch_alter_table('operations', schema=None) as batch_op:
-        batch_op.create_index('idx_operations_owner_undone', ['owner_id', 'undone'], unique=False)
-        batch_op.create_index('idx_operations_student', ['student_id'], unique=False)
+    with op.batch_alter_table("operations", schema=None) as batch_op:
+        batch_op.create_index("idx_operations_owner_undone", ["owner_id", "undone"], unique=False)
+        batch_op.create_index("idx_operations_student", ["student_id"], unique=False)
 
-    op.create_table('students',
-    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-    sa.Column('owner_id', sa.BigInteger(), nullable=False),
-    sa.Column('name', sa.String(), nullable=False),
-    sa.Column('name_lower', sa.String(), nullable=False),
-    sa.Column('price', sa.BigInteger(), nullable=False),
-    sa.Column('balance', sa.Integer(), nullable=False),
-    sa.Column('remainder', sa.BigInteger(), nullable=False),
-    sa.Column('last_payment_at', sa.BigInteger(), nullable=True),
-    sa.Column('last_payment_amount', sa.BigInteger(), nullable=True),
-    sa.Column('last_payment_lessons', sa.Integer(), nullable=True),
-    sa.Column('created_at', sa.BigInteger(), nullable=False),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('owner_id', 'name_lower', name='uq_students_owner_name')
+    op.create_table(
+        "students",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("owner_id", sa.BigInteger(), nullable=False),
+        sa.Column("name", sa.String(), nullable=False),
+        sa.Column("name_lower", sa.String(), nullable=False),
+        sa.Column("price", sa.BigInteger(), nullable=False),
+        sa.Column("balance", sa.Integer(), nullable=False),
+        sa.Column("remainder", sa.BigInteger(), nullable=False),
+        sa.Column("last_payment_at", sa.BigInteger(), nullable=True),
+        sa.Column("last_payment_amount", sa.BigInteger(), nullable=True),
+        sa.Column("last_payment_lessons", sa.Integer(), nullable=True),
+        sa.Column("created_at", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("owner_id", "name_lower", name="uq_students_owner_name"),
     )
-    op.create_table('ui_prefs',
-    sa.Column('owner_id', sa.BigInteger(), nullable=False),
-    sa.Column('sort', sa.String(), nullable=False),
-    sa.Column('page', sa.Integer(), nullable=False),
-    sa.PrimaryKeyConstraint('owner_id')
+    op.create_table(
+        "ui_prefs",
+        sa.Column("owner_id", sa.BigInteger(), nullable=False),
+        sa.Column("sort", sa.String(), nullable=False),
+        sa.Column("page", sa.Integer(), nullable=False),
+        sa.PrimaryKeyConstraint("owner_id"),
     )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_table('ui_prefs')
-    op.drop_table('students')
-    with op.batch_alter_table('operations', schema=None) as batch_op:
-        batch_op.drop_index('idx_operations_student')
-        batch_op.drop_index('idx_operations_owner_undone')
+    op.drop_table("ui_prefs")
+    op.drop_table("students")
+    with op.batch_alter_table("operations", schema=None) as batch_op:
+        batch_op.drop_index("idx_operations_student")
+        batch_op.drop_index("idx_operations_owner_undone")
 
-    op.drop_table('operations')
-    op.drop_table('invites')
-    op.drop_table('fsm')
-    op.drop_table('allowed_users')
+    op.drop_table("operations")
+    op.drop_table("invites")
+    op.drop_table("fsm")
+    op.drop_table("allowed_users")

@@ -102,7 +102,10 @@ def render_operation(op) -> str:
 def describe_operation(op, student_name: str) -> str:
     """Короткое описание для подтверждения отмены."""
     if op.type == "payment":
-        what = f"оплату {format_money(op.amount)} (+{op.lessons_delta} {lessons_word(op.lessons_delta)})"
+        what = (
+            f"оплату {format_money(op.amount)} "
+            f"(+{op.lessons_delta} {lessons_word(op.lessons_delta)})"
+        )
     elif op.type == "charge":
         what = "списание урока"
     elif op.type == "refund":

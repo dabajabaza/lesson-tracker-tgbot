@@ -36,7 +36,9 @@ def main_menu_kb(students, sort: str, page: int, total_pages: int) -> InlineKeyb
     pagination = _pagination_row(f"list:{sort}", page, total_pages)
     if pagination:
         rows.append(pagination)
-    rows.append([_btn("➕ Добавить", "add"), _btn("🔍 Поиск", "search"), _btn("↕️ Сортировка", "sortmenu")])
+    rows.append(
+        [_btn("➕ Добавить", "add"), _btn("🔍 Поиск", "search"), _btn("↕️ Сортировка", "sortmenu")]
+    )
     rows.append([_btn("↩️ Отменить действие", "undo"), _btn("📤 Экспорт", "export")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

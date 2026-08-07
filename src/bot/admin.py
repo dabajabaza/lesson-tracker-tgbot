@@ -35,9 +35,7 @@ def _is_admin(message: Message, admin_ids: frozenset[int]) -> bool:
 
 
 @router.message(Command("invite"))
-async def cmd_invite(
-    message: Message, session: AsyncSession, admin_ids: frozenset[int]
-) -> None:
+async def cmd_invite(message: Message, session: AsyncSession, admin_ids: frozenset[int]) -> None:
     if not _is_admin(message, admin_ids):
         return
     assert message.from_user is not None and message.bot is not None
@@ -83,9 +81,7 @@ async def cmd_allow(
 
 
 @router.message(Command("access"))
-async def cmd_access(
-    message: Message, session: AsyncSession, admin_ids: frozenset[int]
-) -> None:
+async def cmd_access(message: Message, session: AsyncSession, admin_ids: frozenset[int]) -> None:
     """Показать, кто допущен и какие приглашения ещё не погашены."""
     if not _is_admin(message, admin_ids):
         return
@@ -101,8 +97,7 @@ async def cmd_access(
     if rows:
         lines.append(f"\n<b>Допущены</b> ({len(rows)}):")
         lines += [
-            f"  <code>{r.user_id}</code>" + (f" @{r.username}" if r.username else "")
-            for r in rows
+            f"  <code>{r.user_id}</code>" + (f" @{r.username}" if r.username else "") for r in rows
         ]
     else:
         lines.append("\n<b>Допущены</b>: никого (кроме админов)")

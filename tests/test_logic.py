@@ -12,6 +12,7 @@ A, B = 111, 222  # owner id двух разных пользователей
 
 # ---------- чистые функции ----------
 
+
 def test_money_format_and_parse():
     assert format_money(160000) == "1 600 ₽"
     assert format_money(160050) == "1 600,50 ₽"
@@ -26,8 +27,8 @@ def test_money_format_and_parse():
 def test_money_limits():
     assert parse_money_strict("0").error == "zero"
     assert parse_money_strict("1" * 30).error == "range"
-    assert parse_money("10000001") is None            # > 10 млн ₽
-    assert parse_money("10000000") == MAX_MONEY        # ровно лимит проходит
+    assert parse_money("10000001") is None  # > 10 млн ₽
+    assert parse_money("10000000") == MAX_MONEY  # ровно лимит проходит
 
 
 def test_status_and_plural():
@@ -50,6 +51,7 @@ def test_csv_escapes_carriage_return():
 
 
 # ---------- бизнес-логика ----------
+
 
 async def test_payment_example_from_spec(session):
     # ТЗ п.7: цена 1600, оплата 6500 → 4 занятия + остаток 100 ₽
@@ -92,8 +94,8 @@ async def test_change_price_future_only(session):
 async def test_undo_stack_and_stale(session):
     s = await repo.create_student(session, A, "Аня", 160000)
     await session.commit()
-    await repo.apply_payment(session, A, s.id, 650000)      # op1: +4, ост 100
-    await repo.change_price(session, A, s.id, 180000)        # op2: цена 1800
+    await repo.apply_payment(session, A, s.id, 650000)  # op1: +4, ост 100
+    await repo.change_price(session, A, s.id, 180000)  # op2: цена 1800
     await session.commit()
 
     # отмена показанной операции (смена цены) по её id
@@ -104,9 +106,9 @@ async def test_undo_stack_and_stale(session):
     assert r.status == "done" and s.price == 160000
 
     # устаревшая отмена: между показом и подтверждением появилась новая операция
-    stale = await repo.peek_last_operation(session, A)      # теперь payment
+    stale = await repo.peek_last_operation(session, A)  # теперь payment
     stale_id = stale.id
-    await repo.charge_lesson(session, A, s.id)               # новая операция
+    await repo.charge_lesson(session, A, s.id)  # новая операция
     await session.commit()
     r2 = await repo.undo_last_operation(session, A, stale_id)
     await session.commit()
@@ -133,7 +135,7 @@ async def test_multitenant_isolation(session):
 
 
 async def test_sorts_and_search(session):
-    s1 = await repo.create_student(session, A, "Борис", 200000)
+    await repo.create_student(session, A, "Борис", 200000)
     s2 = await repo.create_student(session, A, "Аня", 160000)
     await session.commit()
     await repo.apply_payment(session, A, s2.id, 800000)  # Аня: +5
@@ -172,5 +174,6 @@ def test_render_operation_undone_marker():
         created_at = 1_700_000_000
         undone = True
         snapshot_before = {"price": 160000}
+
     line = render_operation(Op())
     assert line.startswith("❌") and "(отменено)" in line

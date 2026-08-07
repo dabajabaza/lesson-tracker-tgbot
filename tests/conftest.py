@@ -32,7 +32,10 @@ from tests.schema import apply_migrations
 # что между тестами их надо отцеплять.
 _SHARED_ROUTERS = [admin_router, main_router]
 
-TEST_ADMIN_IDS = frozenset({1})
+# 1 — «наш» пользователь диалоговых тестов; 111 и 222 — два преподавателя для
+# тестов межтенантной изоляции. Посторонние (например 999) не входят и молча
+# отбрасываются AccessMiddleware.
+TEST_ADMIN_IDS = frozenset({1, 111, 222})
 
 
 @pytest.fixture(scope="session")

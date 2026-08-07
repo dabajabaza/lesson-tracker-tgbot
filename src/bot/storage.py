@@ -1,6 +1,7 @@
 """Персистентное FSM-хранилище на SQLAlchemy: состояние диалога переживает
 рестарт процесса (в serverless-версии оно жило в таблице sessions)."""
 
+from collections.abc import Mapping
 from typing import Any
 
 from aiogram.fsm.state import State
@@ -35,7 +36,7 @@ class SqlAlchemyStorage(BaseStorage):
             rec = await session.get(FsmRecord, self._key(key))
             return rec.state if rec else None
 
-    async def set_data(self, key: StorageKey, data: dict[str, Any]) -> None:
+    async def set_data(self, key: StorageKey, data: Mapping[str, Any]) -> None:
         async with self._sessionmaker() as session:
             rec = await session.get(FsmRecord, self._key(key))
             if rec is None:

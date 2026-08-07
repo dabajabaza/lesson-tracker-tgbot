@@ -58,22 +58,39 @@ async def main() -> None:
             sys.exit("Целевая БД уже содержит учеников — миграция отменена.")
 
         for r in students:
-            session.add(Student(
-                id=r["id"], owner_id=r["owner_id"], name=r["name"],
-                name_lower=r["name_lower"], price=r["price"], balance=r["balance"],
-                remainder=r["remainder"], last_payment_at=r["last_payment_at"],
-                last_payment_amount=r["last_payment_amount"],
-                last_payment_lessons=r["last_payment_lessons"], created_at=r["created_at"],
-            ))
+            session.add(
+                Student(
+                    id=r["id"],
+                    owner_id=r["owner_id"],
+                    name=r["name"],
+                    name_lower=r["name_lower"],
+                    price=r["price"],
+                    balance=r["balance"],
+                    remainder=r["remainder"],
+                    last_payment_at=r["last_payment_at"],
+                    last_payment_amount=r["last_payment_amount"],
+                    last_payment_lessons=r["last_payment_lessons"],
+                    created_at=r["created_at"],
+                )
+            )
         for r in operations:
             snap = json.loads(r["snapshot_before"]) if r["snapshot_before"] else {}
-            session.add(Operation(
-                id=r["id"], owner_id=r["owner_id"], student_id=r["student_id"],
-                type=r["type"], amount=r["amount"], lessons_delta=r["lessons_delta"],
-                balance_after=r["balance_after"], remainder_after=r["remainder_after"],
-                new_price=r["new_price"], snapshot_before=_norm_snapshot(snap),
-                undone=bool(r["undone"]), created_at=r["created_at"],
-            ))
+            session.add(
+                Operation(
+                    id=r["id"],
+                    owner_id=r["owner_id"],
+                    student_id=r["student_id"],
+                    type=r["type"],
+                    amount=r["amount"],
+                    lessons_delta=r["lessons_delta"],
+                    balance_after=r["balance_after"],
+                    remainder_after=r["remainder_after"],
+                    new_price=r["new_price"],
+                    snapshot_before=_norm_snapshot(snap),
+                    undone=bool(r["undone"]),
+                    created_at=r["created_at"],
+                )
+            )
         await session.commit()
 
         n_students = await session.scalar(select(func.count()).select_from(Student))

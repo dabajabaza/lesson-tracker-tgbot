@@ -12,7 +12,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent  # корень репозитория
+# Корень репозитория: src/bot/config.py -> parents[2]. От него отсчитываются
+# alembic.ini, .bot-token и data.sqlite по умолчанию. Держится на editable-
+# инсталле (пакет живёт в дереве исходников) — у нас он всюду: uv sync локально,
+# pip install -e . на сервере.
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass
@@ -48,9 +52,7 @@ def _read_admin_ids() -> frozenset[int]:
     try:
         # isdecimal, а не isdigit: последний истинен для символов вроде "³",
         # которые int() затем отвергает.
-        return frozenset(
-            int(chunk) for chunk in (c.strip() for c in raw.split(",")) if chunk
-        )
+        return frozenset(int(chunk) for chunk in (c.strip() for c in raw.split(",")) if chunk)
     except ValueError as exc:
         raise RuntimeError(
             f"ADMIN_IDS должен быть списком чисел через запятую, получено: {raw!r}"

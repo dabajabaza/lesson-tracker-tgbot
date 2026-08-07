@@ -17,6 +17,7 @@ INVITEE = 555
 
 # ---------- допуск ----------
 
+
 async def test_stranger_is_not_allowed(session):
     assert await access.is_allowed(session, ADMIN, STRANGER) is False
 
@@ -49,6 +50,7 @@ async def test_empty_admin_ids_blocks_everyone(session):
 
 
 # ---------- приглашения ----------
+
 
 async def test_invite_grants_access(session):
     invite = await access.create_invite(session, created_by=111)

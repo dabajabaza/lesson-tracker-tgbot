@@ -68,15 +68,23 @@ docs/              — ТЗ
 tests/             — pytest на бизнес-логику (in-memory SQLite)
 ```
 
+Код лежит в `src/bot/` (src-раскладка); пакет намеренно называется `bot`, а не
+`lesson_tracker` — на сервере rc.d запускает `python -m bot`, и переименование
+пакета делается только вместе с правкой rc.d.
+
 ## Запуск
 
+Зависимости управляются [uv](https://docs.astral.sh/uv/); `requirements.txt`
+порождается из `uv.lock` (для сервера, где uv нет) и проверяется в CI на дрейф.
+
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 
 # токен — в переменной BOT_TOKEN или в файле .bot-token в корне репозитория
-python -m bot
+uv run python -m bot
 ```
+
+Миграции применяются автоматически при старте (`alembic upgrade head`).
 
 В этой сети прямой доступ к `api.telegram.org` режется провайдером — запускать через
 локальный прокси (для прокси aiogram требует пакет `aiohttp-socks`, он в requirements):
@@ -95,9 +103,11 @@ unix-сокет в Linux, `flock` на остальных системах (на
 ## Тесты
 
 ```bash
-pip install -r requirements-dev.txt
-pytest
+uv run pytest
 ```
+
+Схему тестам даёт настоящая цепочка миграций (не `create_all`), а обработчики
+гоняются через настоящий `Dispatcher` — см. `tests/conftest.py`.
 
 ## Деплой
 
