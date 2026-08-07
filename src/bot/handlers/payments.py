@@ -11,8 +11,9 @@ from ..money import format_money, parse_money_strict
 from ..render import lessons_word, render_card
 from ..services import PaymentService, StudentService, ViewPrefService
 from ..states import Flow
+from ..ui import Responder
 from ..views import card_view
-from ._common import as_int, delete_quietly, edit, menu, message_of, money_error, owner, parts_of
+from ._common import as_int, menu, message_of, money_error, owner, parts_of
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -21,27 +22,30 @@ router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 @router.callback_query(F.data.startswith("pay:"))
 async def on_pay(
-    cb: CallbackQuery, state: FSMContext, students: FromDishka[StudentService]
+    cb: CallbackQuery,
+    state: FSMContext,
+    students: FromDishka[StudentService],
+    ui: FromDishka[Responder],
 ) -> None:
     msg = message_of(cb)
     _cmd, a1, _a2 = parts_of(cb)
     sid = as_int(a1)
     if msg is None or sid is None:
-        await cb.answer("Кнопка устарела", show_alert=True)
+        ui.callback(cb, "Кнопка устарела", show_alert=True)
         return
     s = await students.get(cb.from_user.id, sid)
     if not s:
-        await cb.answer("Ученик не найден", show_alert=True)
+        ui.callback(cb, "Ученик не найден", show_alert=True)
         return
     await state.set_state(Flow.payment_amount)
     await state.update_data(student_id=s.id, prompt_id=msg.message_id)
     note = f"\nДенежный остаток {format_money(s.remainder)} будет учтён." if s.remainder > 0 else ""
-    await edit(
+    ui.edit(
         msg,
         f"💵 {s.name}\nСтоимость занятия: {format_money(s.price)}.{note}\n\nВведите сумму оплаты:",
         cancel_kb(),
     )
-    await cb.answer()
+    ui.callback(cb)
 
 
 @router.message(Flow.payment_amount)
@@ -51,18 +55,19 @@ async def on_payment_amount(
     payments: FromDishka[PaymentService],
     students: FromDishka[StudentService],
     prefs: FromDishka[ViewPrefService],
+    ui: FromDishka[Responder],
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        await message.answer(
-            "Отправьте, пожалуйста, текстовое сообщение.", reply_markup=cancel_kb()
-        )
+        ui.answer(message, "Отправьте, пожалуйста, текстовое сообщение.", reply_markup=cancel_kb())
         return
     parsed = parse_money_strict(text)
     # parsed.value is None вне error-ветки не бывает, но типам это неизвестно.
     if parsed.error or parsed.value is None:
-        await message.answer(
-            money_error("amount", parsed.error or "format", "1600"), reply_markup=cancel_kb()
+        ui.answer(
+            message,
+            money_error("amount", parsed.error or "format", "1600"),
+            reply_markup=cancel_kb(),
         )
         return
     data = await state.get_data()
@@ -75,10 +80,10 @@ async def on_payment_amount(
         else None
     )
     await state.clear()
-    await delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
+    ui.delete(message.chat.id, data.get("prompt_id"))
     if not res:
         text, kb = await menu(students, prefs, owner(message))
-        await message.answer(text, reply_markup=kb)
+        ui.answer(message, text, reply_markup=kb)
         return
     lines = [f"✅ Оплата {format_money(parsed.value)} внесена."]
     if res.prev_remainder > 0:
@@ -88,46 +93,55 @@ async def on_payment_amount(
         lines.append(
             f"Денежный остаток: {format_money(res.remainder)} — будет учтён при следующей оплате."
         )
-    await message.answer(
-        "\n".join(lines) + "\n\n" + render_card(res.student), reply_markup=card_kb(res.student.id)
+    ui.answer(
+        message,
+        "\n".join(lines) + "\n\n" + render_card(res.student),
+        reply_markup=card_kb(res.student.id),
     )
 
 
 @router.callback_query(F.data.startswith("charge:"))
 async def on_charge(
-    cb: CallbackQuery, payments: FromDishka[PaymentService], students: FromDishka[StudentService]
+    cb: CallbackQuery,
+    payments: FromDishka[PaymentService],
+    students: FromDishka[StudentService],
+    ui: FromDishka[Responder],
 ) -> None:
     msg = message_of(cb)
     _cmd, a1, _a2 = parts_of(cb)
     sid = as_int(a1)
     if msg is None or sid is None:
-        await cb.answer("Кнопка устарела", show_alert=True)
+        ui.callback(cb, "Кнопка устарела", show_alert=True)
         return
     s = await payments.charge(cb.from_user.id, sid)
     if not s:
-        await cb.answer("Ученик не найден", show_alert=True)
+        ui.callback(cb, "Ученик не найден", show_alert=True)
         return
-    await edit(msg, *await card_view(students, cb.from_user.id, s.id))
-    await cb.answer(
+    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id))
+    ui.callback(
+        cb,
         f"⚠️ Урок списан. Долг: {abs(s.balance)}"
         if s.balance < 0
-        else f"➖ Урок списан. Осталось: {s.balance}"
+        else f"➖ Урок списан. Осталось: {s.balance}",
     )
 
 
 @router.callback_query(F.data.startswith("refund:"))
 async def on_refund(
-    cb: CallbackQuery, payments: FromDishka[PaymentService], students: FromDishka[StudentService]
+    cb: CallbackQuery,
+    payments: FromDishka[PaymentService],
+    students: FromDishka[StudentService],
+    ui: FromDishka[Responder],
 ) -> None:
     msg = message_of(cb)
     _cmd, a1, _a2 = parts_of(cb)
     sid = as_int(a1)
     if msg is None or sid is None:
-        await cb.answer("Кнопка устарела", show_alert=True)
+        ui.callback(cb, "Кнопка устарела", show_alert=True)
         return
     s = await payments.refund(cb.from_user.id, sid)
     if not s:
-        await cb.answer("Ученик не найден", show_alert=True)
+        ui.callback(cb, "Ученик не найден", show_alert=True)
         return
-    await edit(msg, *await card_view(students, cb.from_user.id, s.id))
-    await cb.answer(f"↩️ Урок возвращён. Осталось: {s.balance}")
+    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id))
+    ui.callback(cb, f"↩️ Урок возвращён. Осталось: {s.balance}")

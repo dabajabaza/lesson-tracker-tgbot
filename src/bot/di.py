@@ -22,6 +22,7 @@ from .config import Config
 from .db import create_db
 from .services import HistoryService, PaymentService, StudentService, ViewPrefService
 from .storage import SqlAlchemyStorage
+from .ui import Responder
 
 
 class AppProvider(Provider):
@@ -75,6 +76,10 @@ class RequestProvider(Provider):
     payments = provide(PaymentService)
     history = provide(HistoryService)
     prefs = provide(ViewPrefService)
+
+    # Буфер исходящих вызовов Telegram: обработчики складывают в него намерения,
+    # middleware сливает после коммита. Один на область запроса — как сессия.
+    responder = provide(Responder)
 
     @provide
     def fsm_storage(self, session: AsyncSession) -> BaseStorage:

@@ -8,7 +8,8 @@ from dishka import FromDishka
 from ..export_data import history_rows, rows_to_csv, rows_to_xlsx, students_rows
 from ..keyboards import export_kb
 from ..services import HistoryService, StudentService
-from ._common import edit, message_of
+from ..ui import Responder
+from ._common import message_of
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -16,29 +17,33 @@ router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 
 @router.callback_query(F.data == "export")
-async def on_export_menu(cb: CallbackQuery) -> None:
+async def on_export_menu(cb: CallbackQuery, ui: FromDishka[Responder]) -> None:
     msg = message_of(cb)
     if msg is None:
-        await cb.answer()
+        ui.callback(cb)
         return
-    await edit(msg, "📤 Что экспортировать?", export_kb())
-    await cb.answer()
+    ui.edit(msg, "📤 Что экспортировать?", export_kb())
+    ui.callback(cb)
 
 
 @router.callback_query(F.data.in_({"exp_csv", "exp_xlsx"}))
 async def on_export(
-    cb: CallbackQuery, students: FromDishka[StudentService], history: FromDishka[HistoryService]
+    cb: CallbackQuery,
+    students: FromDishka[StudentService],
+    history: FromDishka[HistoryService],
+    ui: FromDishka[Responder],
 ) -> None:
     msg = message_of(cb)
     if msg is None:
-        await cb.answer()
+        ui.callback(cb)
         return
     fmt = "csv" if cb.data == "exp_csv" else "xlsx"
-    await _send_export(msg, students, history, cb.from_user.id, fmt)
-    await cb.answer("Готово")
+    await _send_export(ui, msg, students, history, cb.from_user.id, fmt)
+    ui.callback(cb, "Готово")
 
 
 async def _send_export(
+    ui: Responder,
     msg: Message,
     students: StudentService,
     history: HistoryService,
@@ -49,7 +54,7 @@ async def _send_export(
     rows = await students.list_all(uid, "name")
     ops = await history.all_operations(uid)
     if not rows and not ops:
-        await msg.answer("Экспортировать нечего — данных пока нет.")
+        ui.answer(msg, "Экспортировать нечего — данных пока нет.")
         return
     names = {s.id: s.name for s in rows}
     srows = students_rows(rows)
@@ -65,4 +70,4 @@ async def _send_export(
             (rows_to_xlsx(hrows, "История"), "history.xlsx", "📜 История операций"),
         ]
     for data, filename, caption in docs:
-        await msg.answer_document(BufferedInputFile(data, filename), caption=caption)
+        ui.document(msg, BufferedInputFile(data, filename), caption=caption)

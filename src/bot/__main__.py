@@ -62,7 +62,9 @@ async def _establish_connection(bot: Bot):
     while True:
         attempt += 1
         try:
-            me = await bot.get_me()
+            # me(), а не get_me(): aiogram запомнит результат, и обработчикам
+            # (/invite) уже не придётся ходить в сеть внутри транзакции.
+            me = await bot.me()
             await bot.delete_webhook(drop_pending_updates=False)
             return me
         except Exception as e:

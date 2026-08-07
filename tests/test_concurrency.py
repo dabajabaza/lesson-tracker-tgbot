@@ -13,6 +13,7 @@ SQLite допускает одного писателя. aiogram обрабат�
 """
 
 import asyncio
+import sqlite3
 
 from sqlalchemy import select
 
@@ -21,6 +22,25 @@ from bot.services import StudentService
 from tests.bot_harness import make_update_callback
 
 A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS
+
+
+def _write_lock_free(db_path) -> bool:
+    """Свободна ли база для записи прямо сейчас.
+
+    Голый sqlite3 мимо SQLAlchemy — отдельным соединением, с нулевым ожиданием
+    и в обход пула, чтобы ответ был про состояние файла, а не про то, что успел
+    закэшировать движок. В режиме WAL BEGIN IMMEDIATE не мешает читателям и
+    упирается ровно в чужую блокировку записи — то, что и требуется измерить.
+    """
+    con = sqlite3.connect(db_path, timeout=0)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.rollback()
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        con.close()
 
 
 async def _balances(sessionmaker) -> dict[str, int]:
@@ -65,3 +85,36 @@ async def test_пачка_одновременных_апдейтов_одног
     )
 
     assert await _balances(sessionmaker) == {"Аня": -5}
+
+
+async def test_во_время_сети_база_свободна_для_записи(harness, session, sessionmaker, db_path):
+    """Главное свойство, ради которого разворачивался порядок.
+
+    Пока отправка стояла внутри транзакции, блокировка записи держалась весь
+    круг до Telegram и обратно — сотни миллисекунд на апдейт, и потолок в
+    единицы апдейтов в секунду независимо от нагрузки. Теперь обработчик только
+    складывает намерения (см. ui.Responder), а сеть случается после коммита.
+
+    Проверяется буквально: на каждом вызове Telegram спрашиваем у самой базы,
+    свободна ли она для записи. Хотя бы один занятый ответ означает, что сеть
+    снова уехала внутрь транзакции.
+    """
+    students = StudentService(session)
+    a = await students.create(A, "Аня", 160000)
+    await session.commit()
+
+    free: list[bool] = []
+    original = harness.session.make_request
+
+    async def probing(*args, **kwargs):
+        free.append(_write_lock_free(db_path))
+        return await original(*args, **kwargs)
+
+    harness.session.make_request = probing
+
+    await harness.dp.feed_update(
+        harness.bot, make_update_callback(f"charge:{a.id}", user_id=A, update_id=9200)
+    )
+
+    assert free, "апдейт обязан был сходить в Telegram"
+    assert all(free), "во время вызова Telegram транзакция апдейта должна быть уже закрыта"
