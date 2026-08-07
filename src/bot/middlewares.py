@@ -39,7 +39,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import access
-from .models import ProcessedUpdate, now_ts
+from .models import OutboxMessage, ProcessedUpdate, now_ts
 from .storage import SqlAlchemyStorage
 from .ui import Responder
 
@@ -57,8 +57,11 @@ class DbSessionMiddleware(BaseMiddleware):
     Регистрировать ПОСЛЕ ContainerMiddleware (нужен data["dishka_container"]).
     """
 
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
+    def __init__(self, lock: asyncio.Lock) -> None:
+        # Замок приходит снаружи, а не заводится здесь: тот же самый нужен
+        # фоновому отправщику (outbox.py) — писатель в SQLite один на процесс,
+        # и фоновая задача из этого правила не исключение.
+        self._lock = lock
         self._pruned_at = 0.0
 
     async def _prune(self, session: AsyncSession) -> None:
@@ -107,27 +110,40 @@ class DbSessionMiddleware(BaseMiddleware):
             ui.discard()
             raise
         await self._prune(session)
+        # Обещания доставки ложатся в ту же транзакцию, что и операция.
+        await ui.persist(session)
         await session.commit()
         return result
 
-    async def _store_prompts(self, container: AsyncContainer, ui: Responder) -> None:
-        """Дописать id только что отправленных подсказок в состояние FSM.
+    async def _settle(self, container: AsyncContainer, ui: Responder) -> None:
+        """Закрыть хвосты, которые известны только после отправки.
 
-        Второй короткой транзакцией, потому что id сообщения существует лишь
-        после отправки, а отправка теперь идёт после коммита. Две транзакции по
-        миллисекунде вместо одной на весь круг до Telegram — ровно тот размен,
-        ради которого затевался разворот порядка.
+        Второй короткой транзакцией — двумя миллисекундными вместо одной на
+        весь круг до Telegram, ровно тот размен, ради которого затевался
+        разворот порядка. Здесь два дела:
 
-        Потеря этой записи (смерть процесса в узком окне между отправкой и
-        второй транзакцией) стоит одной невынесенной подсказки в чате:
-        удаление и так делается «по возможности».
+        * удалить строки outbox, чьи сообщения ушли (оставшиеся дожмёт
+          outbox.py);
+        * дописать id отправленных подсказок в состояние FSM — message_id
+          существует только после отправки.
+
+        Потеря этой транзакции (смерть процесса в узком окне после отправки)
+        безобидна в обе стороны: неудалённую строку outbox отправщик пошлёт
+        повторно — дубль ответа не страшен, — а невыясненный prompt_id стоит
+        одной неубранной подсказки в чате.
         """
+        delivered = ui.delivered()
+        if not delivered and not ui.prompt_updates:
+            return
         factory = await container.get(async_sessionmaker[AsyncSession])
         async with self._lock, factory() as session:
+            if delivered:
+                await session.execute(delete(OutboxMessage).where(OutboxMessage.id.in_(delivered)))
             storage = SqlAlchemyStorage(session)
             for key, message_id in ui.prompt_updates:
                 await FSMContext(storage=storage, key=key).update_data(prompt_id=message_id)
             await session.commit()
+        delivered.clear()
         ui.prompt_updates.clear()
 
     async def __call__(
@@ -148,8 +164,7 @@ class DbSessionMiddleware(BaseMiddleware):
         # Сеть — уже вне замка и вне транзакции. Пока эти вызовы идут, база
         # свободна и следующий апдейт обрабатывается, а не ждёт.
         await ui.flush(data["bot"])
-        if ui.prompt_updates:
-            await self._store_prompts(container, ui)
+        await self._settle(container, ui)
         return result
 
 
