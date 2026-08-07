@@ -134,3 +134,27 @@ class Invite(Base):
     expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     used_by: Mapped[int | None] = mapped_column(BigInteger)
     used_at: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class ProcessedUpdate(Base):
+    """Отметка «этот апдейт уже применён» — защита от повторной обработки.
+
+    Telegram считает апдейт доставленным только после подтверждения offset, а
+    подтверждение уходит со СЛЕДУЮЩИМ вызовом getUpdates. Процесс, умерший между
+    коммитом и этим вызовом (например, убитый при деплое), получит тот же
+    update_id заново — и оплата применилась бы дважды. Для учёта денег дубль
+    хуже потери: пропавшее сообщение пользователь повторит сам, а лишнее
+    списание тихо испортит баланс.
+
+    Строка пишется в ТОЙ ЖЕ транзакции, что и бизнес-изменение (её кладёт в
+    сессию DbSessionMiddleware, а фиксирует общий commit из repo), поэтому
+    промежуточного состояния не существует: либо зафиксировано и изменение, и
+    отметка, либо ничего. Читающие апдейты не коммитят вовсе и не отмечаются —
+    их повтор безвреден.
+    """
+
+    __tablename__ = "processed_updates"
+
+    # autoincrement=False: id назначает Telegram, а не база.
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
