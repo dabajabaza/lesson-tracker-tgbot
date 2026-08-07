@@ -159,3 +159,40 @@ class ProcessedUpdate(Base):
     # autoincrement=False: id назначает Telegram, а не база.
     update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class OutboxMessage(Base):
+    """Обещание доставить сообщение, данное в той же транзакции, что и операция.
+
+    Порядок «обработчик → коммит → отправка» (см. middlewares.py) снял потолок
+    пропускной способности, но взамен разорвал связь между «операция применена»
+    и «пользователь об этом узнал»: сбой сети после коммита оставлял человека в
+    неведении. Для учёта денег это опасно ровно так же, как дубль, — не увидев
+    подтверждения, преподаватель вводит сумму заново.
+
+    Строка пишется вместе с бизнес-изменением, отправка удаляет её. Не удалось
+    отправить — строка осталась, и её дожмёт фоновый отправщик (outbox.py).
+    Гарантия получается «хотя бы один раз»: дубль ответа безобиден, потеря —
+    нет.
+
+    Кладётся сюда не всё. Ответ на нажатие кнопки Telegram принимает лишь
+    считаные секунды, и хранить его бессмысленно; удаление подсказки
+    косметическое; выгрузка документа — это мегабайты, которые незачем возить
+    через базу, а повторить её пользователь может сам. Персистентны те вызовы,
+    которые несут результат операции: отправка сообщения и правка карточки.
+    """
+
+    __tablename__ = "outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Имя класса метода aiogram («SendMessage») и его же payload в JSON.
+    # Пара «имя + JSON», а не pickle: содержимое строки должно оставаться
+    # читаемым глазами при разборе инцидента и переживать обновление кода.
+    method: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Момент, раньше которого повторять не стоит: backoff после неудачи.
+    next_attempt_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+    __table_args__ = (Index("ix_outbox_next_attempt", "next_attempt_at"),)

@@ -16,12 +16,14 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from dishka import AsyncContainer
 from dishka.integrations.aiogram import ContainerMiddleware, inject_router
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .admin import router as admin_router
 from .config import ROOT, load_config
 from .di import build_container
 from .handlers import router
 from .middlewares import AccessMiddleware, DbSessionMiddleware, FsmSessionMiddleware
+from .outbox import run_sender
 from .storage import ReadOnlyFsmView
 from .watchdog import run_watchdog, sd_notify
 
@@ -166,7 +168,11 @@ def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Di
     dp["admin_ids"] = admin_ids
 
     dp.update.outer_middleware(ContainerMiddleware(container))
-    dp.update.middleware(DbSessionMiddleware())
+    # Один замок записи на процесс: его же берёт фоновый отправщик очереди.
+    # Кладём в данные диспетчера, чтобы точка входа могла до него дотянуться.
+    write_lock = asyncio.Lock()
+    dp["write_lock"] = write_lock
+    dp.update.middleware(DbSessionMiddleware(write_lock))
     # После DbSessionMiddleware: хранилище должно получить ту же сессию из
     # кэша области запроса.
     dp.update.middleware(FsmSessionMiddleware())
@@ -218,6 +224,10 @@ async def _run_bot() -> None:
     watchdog = asyncio.create_task(
         run_watchdog(bot, interval=_WATCHDOG_INTERVAL, probe_timeout=_WATCHDOG_PROBE_TIMEOUT)
     )
+    # Дожимает ответы, чья отправка не состоялась (обычно — потому что процесс
+    # умер между коммитом и отправкой; деплой убивает бота намеренно).
+    sessionmaker = await container.get(async_sessionmaker[AsyncSession])
+    sender = asyncio.create_task(run_sender(bot, sessionmaker, dp["write_lock"]))
     try:
         await dp.start_polling(
             bot,
@@ -226,6 +236,7 @@ async def _run_bot() -> None:
         )
     finally:
         watchdog.cancel()
+        sender.cancel()
         await container.close()
 
 
