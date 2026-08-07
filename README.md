@@ -2,7 +2,9 @@
 
 Telegram-бот учёта оплат учеников преподавателя английского языка: учёт по
 абонементам — оплаты, денежный остаток, списание и возврат занятий, история,
-отмена, поиск, сортировки, экспорт. ТЗ — [`docs/technical-specification.txt`](docs/technical-specification.txt).
+отмена, поиск, сортировки, экспорт. ТЗ — [`docs/technical-specification.txt`](docs/technical-specification.txt);
+принятые архитектурные решения и причины, по которым они такие, — в
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Python, **aiogram 3** + SQLAlchemy, long polling. Мультитенантный: данные каждого
 преподавателя изолированы. Работает как [@LessonTracker42Bot](https://t.me/LessonTracker42Bot).
