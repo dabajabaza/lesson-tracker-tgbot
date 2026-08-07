@@ -9,14 +9,10 @@ import contextlib
 
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import repo
 from ..money import MAX_MONEY, format_money
+from ..services import StudentService, ViewPrefService
 from ..views import main_menu_view
-
-# Команды, у которых первым аргументом идёт id ученика.
-SID_COMMANDS = frozenset({"card", "pay", "charge", "refund", "price", "hist"})
 
 
 def as_int(value) -> int | None:
@@ -70,10 +66,10 @@ async def edit(msg: Message, text: str, kb) -> None:
         raise
 
 
-async def menu(session: AsyncSession, owner_id: int):
+async def menu(students: StudentService, prefs: ViewPrefService, owner_id: int):
     """Главное меню с учётом сохранённой сортировки/страницы пользователя."""
-    sort, page = await repo.get_view_pref(session, owner_id)
-    return await main_menu_view(session, owner_id, sort, page)
+    sort, page = await prefs.get(owner_id)
+    return await main_menu_view(students, owner_id, sort, page)
 
 
 def money_error(kind: str, error: str, example: str) -> str:

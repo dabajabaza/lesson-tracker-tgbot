@@ -6,12 +6,12 @@ from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy.ext.asyncio import AsyncSession
+from dishka import FromDishka
 
-from .. import repo
 from ..keyboards import cancel_kb, card_kb
 from ..money import format_money, parse_money_strict
 from ..render import render_card
+from ..services import StudentService, ViewPrefService
 from ..states import Flow
 from ..views import card_view, search_results_view
 from ._common import as_int, delete_quietly, edit, menu, message_of, money_error, owner, parts_of
@@ -27,14 +27,14 @@ router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 
 @router.callback_query(F.data.startswith("card:"))
-async def on_card(cb: CallbackQuery, session: AsyncSession) -> None:
+async def on_card(cb: CallbackQuery, students: FromDishka[StudentService]) -> None:
     msg = message_of(cb)
     _cmd, a1, _a2 = parts_of(cb)
     sid = as_int(a1)
     if msg is None or sid is None:
         await cb.answer("Кнопка устарела", show_alert=True)
         return
-    await edit(msg, *await card_view(session, cb.from_user.id, sid))
+    await edit(msg, *await card_view(students, cb.from_user.id, sid))
     await cb.answer()
 
 
@@ -54,7 +54,9 @@ async def on_add(cb: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(Flow.new_name)
-async def on_new_name(message: Message, session: AsyncSession, state: FSMContext) -> None:
+async def on_new_name(
+    message: Message, state: FSMContext, students: FromDishka[StudentService]
+) -> None:
     text = (message.text or "").strip()
     if not text:
         await message.answer("Введите имя ученика:", reply_markup=cancel_kb())
@@ -63,7 +65,7 @@ async def on_new_name(message: Message, session: AsyncSession, state: FSMContext
     if len(name) > MAX_NAME_LEN:
         await message.answer("⚠️ Слишком длинное имя. Введите короче:", reply_markup=cancel_kb())
         return
-    if await repo.find_by_name_lower(session, owner(message), name):
+    if await students.find_by_name(owner(message), name):
         await message.answer(
             f"⚠️ Ученик с именем «{name}» уже существует. Введите другое имя:",
             reply_markup=cancel_kb(),
@@ -80,7 +82,9 @@ async def on_new_name(message: Message, session: AsyncSession, state: FSMContext
 
 
 @router.message(Flow.new_price)
-async def on_new_price(message: Message, session: AsyncSession, state: FSMContext) -> None:
+async def on_new_price(
+    message: Message, state: FSMContext, students: FromDishka[StudentService]
+) -> None:
     text = (message.text or "").strip()
     if not text:
         await message.answer("Введите стоимость занятия:", reply_markup=cancel_kb())
@@ -95,11 +99,11 @@ async def on_new_price(message: Message, session: AsyncSession, state: FSMContex
     name = data.get("name")
     if not isinstance(name, str) or not name:
         # Состояние потерялось между шагами — просим имя заново, а не роняем
-        # обработчик на name=None внутри repo.
+        # обработчик на name=None внутри сервиса.
         await state.set_state(Flow.new_name)
         await message.answer("Введите имя ученика:", reply_markup=cancel_kb())
         return
-    student = await repo.create_student(session, owner(message), name, parsed.value)
+    student = await students.create(owner(message), name, parsed.value)
     if not student:
         await state.set_state(Flow.new_name)
         await message.answer(
@@ -117,14 +121,16 @@ async def on_new_price(message: Message, session: AsyncSession, state: FSMContex
 
 
 @router.callback_query(F.data.startswith("price:"))
-async def on_price(cb: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+async def on_price(
+    cb: CallbackQuery, state: FSMContext, students: FromDishka[StudentService]
+) -> None:
     msg = message_of(cb)
     _cmd, a1, _a2 = parts_of(cb)
     sid = as_int(a1)
     if msg is None or sid is None:
         await cb.answer("Кнопка устарела", show_alert=True)
         return
-    s = await repo.get_student(session, cb.from_user.id, sid)
+    s = await students.get(cb.from_user.id, sid)
     if not s:
         await cb.answer("Ученик не найден", show_alert=True)
         return
@@ -140,7 +146,12 @@ async def on_price(cb: CallbackQuery, session: AsyncSession, state: FSMContext) 
 
 
 @router.message(Flow.price_change)
-async def on_price_change(message: Message, session: AsyncSession, state: FSMContext) -> None:
+async def on_price_change(
+    message: Message,
+    state: FSMContext,
+    students: FromDishka[StudentService],
+    prefs: FromDishka[ViewPrefService],
+) -> None:
     text = (message.text or "").strip()
     if not text:
         await message.answer("Введите новую стоимость занятия:", reply_markup=cancel_kb())
@@ -154,14 +165,14 @@ async def on_price_change(message: Message, session: AsyncSession, state: FSMCon
     data = await state.get_data()
     student_id = as_int(data.get("student_id"))
     s = (
-        await repo.change_price(session, owner(message), student_id, parsed.value)
+        await students.change_price(owner(message), student_id, parsed.value)
         if student_id is not None
         else None
     )
     await state.clear()
     await delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))
     if not s:
-        text, kb = await menu(session, owner(message))
+        text, kb = await menu(students, prefs, owner(message))
         await message.answer(text, reply_markup=kb)
         return
     await message.answer(
@@ -187,12 +198,14 @@ async def on_search_start(cb: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(Flow.search)
-async def on_search(message: Message, session: AsyncSession, state: FSMContext) -> None:
+async def on_search(
+    message: Message, state: FSMContext, students: FromDishka[StudentService]
+) -> None:
     text = (message.text or "").strip()
     if not text:
         await message.answer("Введите имя или его часть:", reply_markup=cancel_kb())
         return
-    found = await repo.search_students(session, owner(message), text)
+    found = await students.search(owner(message), text)
     data = await state.get_data()
     await state.clear()
     await delete_quietly(message.bot, message.chat.id, data.get("prompt_id"))

@@ -3,11 +3,11 @@
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
-from sqlalchemy.ext.asyncio import AsyncSession
+from dishka import FromDishka
 
-from .. import repo
 from ..export_data import history_rows, rows_to_csv, rows_to_xlsx, students_rows
 from ..keyboards import export_kb
+from ..services import HistoryService, StudentService
 from ._common import edit, message_of
 
 router = Router()
@@ -26,24 +26,33 @@ async def on_export_menu(cb: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.in_({"exp_csv", "exp_xlsx"}))
-async def on_export(cb: CallbackQuery, session: AsyncSession) -> None:
+async def on_export(
+    cb: CallbackQuery, students: FromDishka[StudentService], history: FromDishka[HistoryService]
+) -> None:
     msg = message_of(cb)
     if msg is None:
         await cb.answer()
         return
-    await _send_export(msg, session, cb.from_user.id, "csv" if cb.data == "exp_csv" else "xlsx")
+    fmt = "csv" if cb.data == "exp_csv" else "xlsx"
+    await _send_export(msg, students, history, cb.from_user.id, fmt)
     await cb.answer("Готово")
 
 
-async def _send_export(msg: Message, session: AsyncSession, uid: int, fmt: str) -> None:
+async def _send_export(
+    msg: Message,
+    students: StudentService,
+    history: HistoryService,
+    uid: int,
+    fmt: str,
+) -> None:
     """Каждый пользователь выгружает только свои данные."""
-    students = await repo.list_students(session, uid, "name")
-    ops = await repo.get_all_operations(session, uid)
-    if not students and not ops:
+    rows = await students.list_all(uid, "name")
+    ops = await history.all_operations(uid)
+    if not rows and not ops:
         await msg.answer("Экспортировать нечего — данных пока нет.")
         return
-    names = {s.id: s.name for s in students}
-    srows = students_rows(students)
+    names = {s.id: s.name for s in rows}
+    srows = students_rows(rows)
     hrows = history_rows(ops, names)
     if fmt == "csv":
         docs = [
