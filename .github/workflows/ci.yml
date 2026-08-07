@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+# Один активный прогон на ссылку: новый пуш отменяет предыдущий.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITLEAKS_VERSION: 8.30.1
+
+jobs:
+  # Имя job'а — это имя статус-чека, на которое ссылается ruleset ветки main
+  # и которое проверяет сервер перед выкаткой тега. Менять его нельзя, не
+  # поправив ruleset: защита молча перестанет требовать зелёный CI.
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # gitleaks смотрит всю историю, а не только последний коммит,
+          # поэтому мелкий клон здесь не годится
+          fetch-depth: 0
+
+      - name: Поиск секретов
+        run: |
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/gitleaks" gitleaks
+          "$RUNNER_TEMP/gitleaks/gitleaks" detect \
+            --source . --log-opts=--all --no-banner --redact
+
+      - uses: actions/setup-python@v7
+        with:
+          # Ровно та же минорная версия, что на сервере (3.12.13):
+          # иначе тесты проверяют не то окружение, в котором бот работает.
+          python-version: '3.12'
+          cache: pip
+
+      - name: Зависимости
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Тесты
+        run: pytest -q
