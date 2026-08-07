@@ -16,6 +16,7 @@
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -25,26 +26,65 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.types import Message, TelegramObject
 from dishka import AsyncContainer
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import access
+from .models import ProcessedUpdate, now_ts
 
 log = logging.getLogger(__name__)
 
+# Telegram держит неподтверждённые апдейты сутки, так что недели отметок с
+# запасом хватает, а таблица не растёт бесконечно.
+_MARK_TTL = 7 * 24 * 3600
+_PRUNE_EVERY = 3600
+
 
 class DbSessionMiddleware(BaseMiddleware):
-    """Сессия из REQUEST-скоупа dishka + замок + коммит.
+    """Сессия из REQUEST-скоупа dishka + замок + коммит + идемпотентность.
 
     Регистрировать ПОСЛЕ ContainerMiddleware (нужен data["dishka_container"]).
     """
 
     def __init__(self) -> None:
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._pruned_at = 0.0
+
+    async def _prune(self, session: AsyncSession) -> None:
+        """Чистка старых отметок. Раз в час и ПОСЛЕ обработчика.
+
+        Порядок важен: DELETE в начале забрал бы блокировку записи SQLite на всю
+        обработку. Здесь он ложится вплотную к штатному коммиту.
+        """
+        if time.monotonic() - self._pruned_at < _PRUNE_EVERY:
+            return
+        self._pruned_at = time.monotonic()
+        await session.execute(
+            delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - _MARK_TTL)
+        )
 
     async def _run(self, handler, event, data):
         container: AsyncContainer = data["dishka_container"]
         session = await container.get(AsyncSession)
         data["session"] = session
+
+        # Middleware висит на dp.update, поэтому event — это сам Update.
+        # getattr, а не прямое обращение: в тестах сюда прилетают и голые
+        # объекты сообщений, у которых update_id нет.
+        update_id = getattr(event, "update_id", None)
+        if update_id is not None:
+            seen = await session.scalar(
+                select(ProcessedUpdate.update_id).where(ProcessedUpdate.update_id == update_id)
+            )
+            if seen is not None:
+                log.warning("Апдейт %s уже применён — повтор отброшен", update_id)
+                return None
+            # Только add: отдельный коммит отметил бы апдейт обработанным ДО
+            # того, как случилось изменение, и смерть процесса в этот промежуток
+            # превратила бы риск дубля в риск потери. Строку зафиксирует общий
+            # коммит ниже — вместе с бизнес-изменением, одной транзакцией.
+            session.add(ProcessedUpdate(update_id=update_id))
+
         try:
             result = await handler(event, data)
         except Exception:
@@ -53,6 +93,7 @@ class DbSessionMiddleware(BaseMiddleware):
             # раньше, чем провайдер откатил бы хвост.
             await session.rollback()
             raise
+        await self._prune(session)
         await session.commit()
         return result
 
