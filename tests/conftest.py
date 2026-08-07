@@ -26,6 +26,7 @@ from bot.config import Config
 from bot.db import create_db
 from bot.di import build_container
 from bot.handlers import router as main_router
+from bot.services import HistoryService, PaymentService, StudentService, ViewPrefService
 from tests.bot_harness import FAKE_BOT_TOKEN, BotHarness, RecordingSession
 from tests.schema import apply_migrations
 
@@ -82,6 +83,29 @@ async def sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 async def session(sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
     async with sessionmaker() as s:
         yield s
+
+
+# Сервисы поверх той же сессии. В бою их собирает dishka; в тестах бизнес-логики
+# строим руками — так виднее, что сервис это просто класс над сессией, и не
+# приходится тащить контейнер туда, где он не нужен.
+@pytest.fixture
+def students(session: AsyncSession) -> StudentService:
+    return StudentService(session)
+
+
+@pytest.fixture
+def payments(session: AsyncSession, students: StudentService) -> PaymentService:
+    return PaymentService(session, students)
+
+
+@pytest.fixture
+def history(session: AsyncSession, students: StudentService) -> HistoryService:
+    return HistoryService(session, students)
+
+
+@pytest.fixture
+def prefs(session: AsyncSession) -> ViewPrefService:
+    return ViewPrefService(session)
 
 
 def make_config(db_path: Path) -> Config:

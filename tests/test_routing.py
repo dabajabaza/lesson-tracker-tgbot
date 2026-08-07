@@ -7,8 +7,8 @@
 
 from sqlalchemy import select
 
-from bot import repo
 from bot.models import Student
+from bot.services import StudentService
 
 ADMIN = 1
 
@@ -37,10 +37,10 @@ async def test_start_прерывает_диалог_а_не_становитс�
     assert await _students(sessionmaker) == []
 
 
-async def test_нажатие_кнопки_сбрасывает_начатый_ввод(harness, session, sessionmaker):
+async def test_нажатие_кнопки_сбрасывает_начатый_ввод(harness, session, sessionmaker, students):
     """«Введите сумму» для одного ученика не должно пережить переход к другому."""
-    a = await repo.create_student(session, ADMIN, "Аня", 160000)
-    b = await repo.create_student(session, ADMIN, "Боря", 200000)
+    a = await students.create(ADMIN, "Аня", 160000)
+    b = await students.create(ADMIN, "Боря", 200000)
     await session.commit()
 
     await harness.click(f"pay:{a.id}", user_id=ADMIN)  # начали оплату Ане
@@ -48,16 +48,16 @@ async def test_нажатие_кнопки_сбрасывает_начатый_�
     await harness.send("5000", user_id=ADMIN)  # это уже не сумма
 
     async with sessionmaker() as chk:
-        fresh_a = await repo.get_student(chk, ADMIN, a.id)
-        fresh_b = await repo.get_student(chk, ADMIN, b.id)
+        fresh_a = await StudentService(chk).get(ADMIN, a.id)
+        fresh_b = await StudentService(chk).get(ADMIN, b.id)
     assert fresh_a.balance == 0, "оплата не должна была примениться к Ане"
     assert fresh_b.balance == 0, "и к Боре тоже"
 
 
-async def test_noop_не_сбрасывает_ввод(harness, session, sessionmaker):
+async def test_noop_не_сбрасывает_ввод(harness, session, sessionmaker, students):
     """Единственное исключение из правила выше: noop — это неактивная кнопка
     вроде номера страницы, она не должна ломать начатый ввод."""
-    a = await repo.create_student(session, ADMIN, "Аня", 160000)
+    a = await students.create(ADMIN, "Аня", 160000)
     await session.commit()
 
     await harness.click(f"pay:{a.id}", user_id=ADMIN)
@@ -65,7 +65,7 @@ async def test_noop_не_сбрасывает_ввод(harness, session, session
     await harness.send("1600", user_id=ADMIN)
 
     async with sessionmaker() as chk:
-        fresh = await repo.get_student(chk, ADMIN, a.id)
+        fresh = await StudentService(chk).get(ADMIN, a.id)
     assert fresh.balance == 1, "оплата обязана была примениться"
 
 

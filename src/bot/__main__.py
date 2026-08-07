@@ -15,7 +15,7 @@ from aiogram.types import ErrorEvent
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from dishka import AsyncContainer
-from dishka.integrations.aiogram import ContainerMiddleware
+from dishka.integrations.aiogram import ContainerMiddleware, inject_router
 
 from .admin import router as admin_router
 from .config import ROOT, load_config
@@ -176,6 +176,14 @@ def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Di
     dp.include_router(router)
 
     dp.errors.register(on_error)
+
+    # Инъекция FromDishka в обработчики. Вызывается явно, потому что
+    # setup_dishka мы не используем (он же навешивал бы и лишние контейнеры).
+    # inject_router обходит все вложенные роутеры и пропускает update-обсервер,
+    # так что наши update-middleware остаются нетронутыми. Один вызов вместо
+    # двух десятков декораторов @inject — забыть его в новом обработчике
+    # невозможно.
+    inject_router(dp)
     return dp
 
 

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from .config import Config
 from .db import create_db
+from .services import HistoryService, PaymentService, StudentService, ViewPrefService
 from .storage import SqlAlchemyStorage
 
 
@@ -66,6 +67,14 @@ class RequestProvider(Provider):
             exception = yield session
             if exception is not None:
                 await session.rollback()
+
+    # Сервисы: dishka собирает их по типам аргументов конструктора, поэтому
+    # PaymentService и HistoryService получают тот же StudentService, что и
+    # обработчик, — а тот ту же сессию. Один экземпляр на область запроса.
+    students = provide(StudentService)
+    payments = provide(PaymentService)
+    history = provide(HistoryService)
+    prefs = provide(ViewPrefService)
 
     @provide
     def fsm_storage(self, session: AsyncSession) -> BaseStorage:

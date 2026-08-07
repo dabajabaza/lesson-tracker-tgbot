@@ -1,7 +1,6 @@
 """Тесты бизнес-логики и чистых функций на настоящем SQLite (in-memory).
 Фикстуры session/sessionmaker/engine — в conftest.py."""
 
-from bot import repo
 from bot.csv_export import to_csv
 from bot.export_data import history_rows, students_rows
 from bot.money import MAX_MONEY, format_money, parse_money, parse_money_strict, to_rubles
@@ -53,110 +52,110 @@ def test_csv_escapes_carriage_return():
 # ---------- бизнес-логика ----------
 
 
-async def test_payment_example_from_spec(session):
+async def test_payment_example_from_spec(session, students, payments):
     # ТЗ п.7: цена 1600, оплата 6500 → 4 занятия + остаток 100 ₽
-    anya = await repo.create_student(session, A, "Аня", 160000)
+    anya = await students.create(A, "Аня", 160000)
     await session.commit()
-    res = await repo.apply_payment(session, A, anya.id, 650000)
+    res = await payments.apply(A, anya.id, 650000)
     await session.commit()
     assert res.lessons == 4 and res.remainder == 10000
     assert anya.balance == 4 and anya.remainder == 10000
     assert anya.last_payment_amount == 650000 and anya.last_payment_lessons == 4
     # следующая оплата 1500: 100 + 1500 = 1600 → +1 занятие, остаток 0
-    res2 = await repo.apply_payment(session, A, anya.id, 150000)
+    res2 = await payments.apply(A, anya.id, 150000)
     await session.commit()
     assert res2.lessons == 1 and res2.remainder == 0 and res2.prev_remainder == 10000
     assert anya.balance == 5
 
 
-async def test_charge_refund_and_debt(session):
-    s = await repo.create_student(session, A, "Коля", 100000)
+async def test_charge_refund_and_debt(session, students, payments):
+    s = await students.create(A, "Коля", 100000)
     await session.commit()
-    await repo.charge_lesson(session, A, s.id)
+    await payments.charge(A, s.id)
     await session.commit()
     assert s.balance == -1  # долг (баланс уходит в минус)
-    await repo.refund_lesson(session, A, s.id)
+    await payments.refund(A, s.id)
     await session.commit()
     assert s.balance == 0
 
 
-async def test_change_price_future_only(session):
-    s = await repo.create_student(session, A, "Ева", 160000)
+async def test_change_price_future_only(session, students, payments):
+    s = await students.create(A, "Ева", 160000)
     await session.commit()
-    await repo.apply_payment(session, A, s.id, 320000)  # +2 занятия
+    await payments.apply(A, s.id, 320000)  # +2 занятия
     await session.commit()
-    await repo.change_price(session, A, s.id, 200000)
+    await students.change_price(A, s.id, 200000)
     await session.commit()
     assert s.price == 200000
     assert s.balance == 2  # уже оплаченные занятия не пересчитываются
 
 
-async def test_undo_stack_and_stale(session):
-    s = await repo.create_student(session, A, "Аня", 160000)
+async def test_undo_stack_and_stale(session, students, payments, history):
+    s = await students.create(A, "Аня", 160000)
     await session.commit()
-    await repo.apply_payment(session, A, s.id, 650000)  # op1: +4, ост 100
-    await repo.change_price(session, A, s.id, 180000)  # op2: цена 1800
+    await payments.apply(A, s.id, 650000)  # op1: +4, ост 100
+    await students.change_price(A, s.id, 180000)  # op2: цена 1800
     await session.commit()
 
     # отмена показанной операции (смена цены) по её id
-    op = await repo.peek_last_operation(session, A)
+    op = await history.peek_last(A)
     assert op.type == "price_change"
-    r = await repo.undo_last_operation(session, A, op.id)
+    r = await history.undo_last(A, op.id)
     await session.commit()
     assert r.status == "done" and s.price == 160000
 
     # устаревшая отмена: между показом и подтверждением появилась новая операция
-    stale = await repo.peek_last_operation(session, A)  # теперь payment
+    stale = await history.peek_last(A)  # теперь payment
     stale_id = stale.id
-    await repo.charge_lesson(session, A, s.id)  # новая операция
+    await payments.charge(A, s.id)  # новая операция
     await session.commit()
-    r2 = await repo.undo_last_operation(session, A, stale_id)
+    r2 = await history.undo_last(A, stale_id)
     await session.commit()
     assert r2.status == "stale"
     assert s.balance == 3  # 4 (оплата) − 1 (списание), откат не выполнен
 
 
-async def test_multitenant_isolation(session):
-    a_anya = await repo.create_student(session, A, "Аня", 160000)
+async def test_multitenant_isolation(session, students, payments, history):
+    a_anya = await students.create(A, "Аня", 160000)
     await session.commit()
     # у другого владельца имя «Аня» свободно
-    b_anya = await repo.create_student(session, B, "Аня", 300000)
+    b_anya = await students.create(B, "Аня", 300000)
     await session.commit()
     assert b_anya is not None and b_anya.id != a_anya.id
     # у A имя занято без учёта регистра
-    assert await repo.create_student(session, A, "аня", 999) is None
+    assert await students.create(A, "аня", 999) is None
     # ученик A невидим для B и наоборот
-    assert await repo.get_student(session, B, a_anya.id) is None
-    assert await repo.get_student(session, A, b_anya.id) is None
+    assert await students.get(B, a_anya.id) is None
+    assert await students.get(A, b_anya.id) is None
     # операции изолированы
-    await repo.apply_payment(session, A, a_anya.id, 160000)
+    await payments.apply(A, a_anya.id, 160000)
     await session.commit()
-    assert await repo.peek_last_operation(session, B) is None
+    assert await history.peek_last(B) is None
 
 
-async def test_sorts_and_search(session):
-    await repo.create_student(session, A, "Борис", 200000)
-    s2 = await repo.create_student(session, A, "Аня", 160000)
+async def test_sorts_and_search(session, students, payments):
+    await students.create(A, "Борис", 200000)
+    s2 = await students.create(A, "Аня", 160000)
     await session.commit()
-    await repo.apply_payment(session, A, s2.id, 800000)  # Аня: +5
+    await payments.apply(A, s2.id, 800000)  # Аня: +5
     await session.commit()
-    by_name = await repo.list_students(session, A, "name")
+    by_name = await students.list_all(A, "name")
     assert [s.name for s in by_name] == ["Аня", "Борис"]
-    by_bal = await repo.list_students(session, A, "bal")
+    by_bal = await students.list_all(A, "bal")
     assert by_bal[0].name == "Аня"  # больше остаток — выше
-    by_due = await repo.list_students(session, A, "due")
+    by_due = await students.list_all(A, "due")
     assert by_due[0].name == "Борис"  # меньше остаток — «скоро оплата»
-    found = await repo.search_students(session, A, "ор")
+    found = await students.search(A, "ор")
     assert [s.name for s in found] == ["Борис"]
 
 
-async def test_export_rows(session):
-    s = await repo.create_student(session, A, "Аня", 160000)
+async def test_export_rows(session, students, payments, history):
+    s = await students.create(A, "Аня", 160000)
     await session.commit()
-    await repo.apply_payment(session, A, s.id, 650000)
+    await payments.apply(A, s.id, 650000)
     await session.commit()
-    students = await repo.list_students(session, A, "name")
-    ops = await repo.get_all_operations(session, A)
+    students = await students.list_all(A, "name")
+    ops = await history.all_operations(A)
     scsv = to_csv(students_rows(students))
     assert "Аня;1600,00;4" in scsv
     hcsv = to_csv(history_rows(ops, {s.id: s.name}))
