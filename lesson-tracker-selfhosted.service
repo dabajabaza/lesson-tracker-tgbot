@@ -25,8 +25,8 @@ StartLimitBurst=60
 # после смены сети / провала прокси) — systemd убивает и перезапускает.
 Type=notify
 WatchdogSec=90
-WorkingDirectory=%h/Projects/lesson_tracker_tg_bot
-ExecStart=%h/Projects/lesson_tracker_tg_bot/.venv/bin/python -m bot
+WorkingDirectory=%h/Projects/lesson-tracker-tgbot
+ExecStart=%h/Projects/lesson-tracker-tgbot/.venv/bin/python -m bot
 # Прямой доступ к api.telegram.org в этой сети режется — ходим через прокси.
 Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
 # Restart=always покрывает и штатный выход, и срабатывание watchdog.
