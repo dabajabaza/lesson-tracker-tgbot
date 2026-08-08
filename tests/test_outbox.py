@@ -11,7 +11,6 @@
 потеря — нет.
 """
 
-import asyncio
 from unittest.mock import patch
 
 from sqlalchemy import select
@@ -66,7 +65,7 @@ async def test_сбой_отправки_оставляет_обещание_и_
 
     harness.session.clear()
     await _make_due(sessionmaker)
-    sent = await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
+    sent, carry = await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock)
 
     assert sent == 1
     assert any("Ученик добавлен" in t for t in harness.session.sent_texts())
@@ -87,7 +86,7 @@ async def test_повторная_доставка_не_повторяет_оп�
 
     assert await student_balances(sessionmaker) == [("Лера", 0)]
     await _make_due(sessionmaker)
-    await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
+    await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock)
     assert await student_balances(sessionmaker) == [("Лера", 0)], "ученик не должен задвоиться"
 
 
@@ -102,7 +101,7 @@ async def test_свежая_строка_не_видна_отправщику(ha
     del harness.session.fail_on["SendMessage"]
 
     assert len(await queued_messages(sessionmaker)) == 1, "обещание должно быть записано"
-    assert await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock()) == 0
+    assert (await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock))[0] == 0
     assert len(await queued_messages(sessionmaker)) == 1, "строка должна дождаться своего срока"
 
 
@@ -136,7 +135,7 @@ async def test_неудача_дожимки_переносит_попытку(h
     await harness.send("1600", user_id=ADMIN)
 
     await _make_due(sessionmaker)
-    sent = await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
+    sent, carry = await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock)
 
     assert sent == 0
     queued = await queued_messages(sessionmaker)
@@ -172,7 +171,7 @@ async def test_просроченное_обещание_выбрасывает�
         row.created_at -= outbox.TTL + 1
         await s.commit()
 
-    await outbox.purge_expired(sessionmaker, asyncio.Lock())
+    await outbox.purge_expired(sessionmaker, harness.write_lock)
     assert await queued_messages(sessionmaker) == []
 
 
@@ -191,7 +190,7 @@ async def test_нечитаемое_обещание_не_застревает(h
         await s.commit()
 
     await _make_due(sessionmaker)
-    await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
+    await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock)
     assert await queued_messages(sessionmaker) == []
 
 
@@ -314,7 +313,7 @@ async def test_списание_имеет_персистентное_подтв
 
     harness.session.clear()
     await _make_due(sessionmaker)
-    assert await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock()) == 1
+    assert (await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock))[0] == 1
     assert await student_balances(sessionmaker) == [("Аня", -1)], "дожимается ответ, а не операция"
 
 
@@ -423,3 +422,72 @@ async def test_clear_удаляет_строку_fsm(harness, sessionmaker):
     async with sessionmaker() as s:
         rows = list(await s.scalars(select(FsmRecord)))
     assert rows == [], f"после clear() строка должна исчезнуть: {[(r.key, r.state) for r in rows]}"
+
+
+async def test_сбой_дозаписи_не_зацикливает_дубли(harness, sessionmaker, monkeypatch):
+    """Пачка разослана, а записать её судьбу не вышло (внешний писатель держит
+    базу, полный диск). Раньше цикл проглатывал исключение и через пять секунд
+    слал ту же пачку снова — «Оплата внесена» приходила бы человеку каждые
+    пять секунд до оживления базы. Теперь незаписанный исход возвращается
+    вызывающему, и слать дальше без его дозаписи нельзя.
+    """
+    await harness.click("add", user_id=ADMIN)
+    await harness.send("Лера", user_id=ADMIN)
+    harness.session.fail_on["SendMessage"] = RuntimeError("сеть упала")
+    await harness.send("1600", user_id=ADMIN)
+    del harness.session.fail_on["SendMessage"]
+    await _make_due(sessionmaker)
+
+    real_apply = outbox._apply_outcome
+    boom = {"left": 1}
+
+    async def flaky_apply(sm, lock, outcome):
+        if boom["left"]:
+            boom["left"] -= 1
+            raise RuntimeError("база занята внешним писателем")
+        await real_apply(sm, lock, outcome)
+
+    monkeypatch.setattr(outbox, "_apply_outcome", flaky_apply)
+
+    harness.session.clear()
+    sent, carry = await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock)
+    assert sent == 1 and carry, "исход обязан вернуться незаписанным"
+    first_batch = len(harness.session.calls_of("SendMessage"))
+
+    # Как поступает run_sender: сначала дозапись, потом новые отправки.
+    await outbox._apply_outcome(sessionmaker, harness.write_lock, carry)
+    assert not await outbox._has_due(await _engine_of(sessionmaker))
+    assert len(harness.session.calls_of("SendMessage")) == first_batch, (
+        "до дозаписи исхода ни одно сообщение не должно уйти повторно"
+    )
+    assert await queued_messages(sessionmaker) == []
+
+
+async def _engine_of(sessionmaker):
+    return sessionmaker.kw["bind"]
+
+
+async def test_пустой_тик_поллера_не_трогает_блокировку_записи(harness, sessionmaker, container):
+    """Штатное состояние очереди — пустая, и узнавать это надо бесплатно.
+
+    Раньше каждый тик открывал BEGIN IMMEDIATE под общим замком — 17 тысяч
+    транзакций записи в сутки ради пустой таблицы, а при живом внешнем
+    писателе каждый тик ещё и блокировал апдейты людей на busy_timeout.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    engine = await container.get(AsyncEngine)
+    immediate: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _record(_conn, _cursor, statement, *_args):  # noqa: ANN202
+        if statement.startswith("BEGIN IMMEDIATE"):
+            immediate.append(statement)
+
+    try:
+        assert not await outbox._has_due(engine), "очередь пуста"
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _record)
+
+    assert immediate == [], "пустая проверка очереди не должна открывать запись"

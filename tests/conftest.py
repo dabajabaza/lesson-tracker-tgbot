@@ -6,6 +6,7 @@
 тесту достаётся копия готового файла.
 """
 
+import asyncio
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -137,10 +138,14 @@ async def harness(container: AsyncContainer) -> AsyncIterator[BotHarness]:
     session = RecordingSession()
     bot = Bot(token=FAKE_BOT_TOKEN, session=session)
 
-    dp = build_dispatcher(container, TEST_ADMIN_IDS)
+    # Тот же замок, что и у прода, — и ОН ЖЕ должен использоваться тестами
+    # фонового отправщика: свежий Lock() в тесте расщепил бы единственного
+    # писателя ровно так, как это запрещает L4.
+    write_lock = asyncio.Lock()
+    dp = build_dispatcher(container, TEST_ADMIN_IDS, write_lock)
     await dp.emit_startup()
     try:
-        yield BotHarness(bot=bot, dp=dp, session=session)
+        yield BotHarness(bot=bot, dp=dp, session=session, write_lock=write_lock)
     finally:
         await dp.emit_shutdown()
         for router in _SHARED_ROUTERS:
