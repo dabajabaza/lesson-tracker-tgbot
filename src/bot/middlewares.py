@@ -142,6 +142,7 @@ class DbSessionMiddleware(BaseMiddleware):
           outbox.py);
         * дописать id отправленных подсказок в состояние FSM — message_id
           существует только после отправки;
+        * закрыть диалоги, чью подсказку не удалось показать вовсе;
         * раз в час вычистить просроченные отметки идемпотентности.
 
         Чистка живёт ЗДЕСЬ, а не в транзакции апдейта. Пока она делила
@@ -158,7 +159,7 @@ class DbSessionMiddleware(BaseMiddleware):
         """
         delivered = ui.delivered()
         prune = self._prune_due()
-        if not delivered and not ui.prompt_updates and not prune:
+        if not delivered and not ui.prompt_updates and not ui.failed_prompts and not prune:
             return
         factory = await container.get(async_sessionmaker[AsyncSession])
         async with self._lock, factory() as session:
@@ -166,7 +167,28 @@ class DbSessionMiddleware(BaseMiddleware):
                 await session.execute(delete(OutboxMessage).where(OutboxMessage.id.in_(delivered)))
             storage = SqlAlchemyStorage(session)
             for key, message_id in ui.prompt_updates:
-                await FSMContext(storage=storage, key=key).update_data(prompt_id=message_id)
+                # Гард от гонки: эта запись идёт ПОСЛЕ круга сети, и быстрый
+                # следующий апдейт мог уже завершить диалог. Дописать prompt_id
+                # в закрытый диалог значило бы воскресить пустую строку мусором
+                # {"prompt_id": …}. Пропускаем; цена — одна неубранная
+                # подсказка, тот же бюджет, что у потери самой транзакции
+                # (см. L5).
+                ctx = FSMContext(storage=storage, key=key)
+                if await ctx.get_state() is None:
+                    continue
+                await ctx.update_data(prompt_id=message_id)
+            for key in ui.failed_prompts:
+                # Подсказку не удалось показать ни правкой, ни запасным
+                # сообщением — а состояние диалога уже закоммичено. Невидимый
+                # диалог хуже прерванного: человек решает, что нажатие не
+                # прошло, и его следующее сообщение (телефон, цена из другого
+                # разговора) молча становится ответом на вопрос, которого он
+                # не видел. Закрываем диалог.
+                ctx = FSMContext(storage=storage, key=key)
+                if await ctx.get_state() is None:
+                    continue
+                await ctx.clear()
+                log.warning("Диалог %s закрыт: подсказку не удалось показать", key)
             if prune:
                 await session.execute(
                     delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - _MARK_TTL)
@@ -178,6 +200,7 @@ class DbSessionMiddleware(BaseMiddleware):
             self._pruned_at = time.monotonic()
         delivered.clear()
         ui.prompt_updates.clear()
+        ui.failed_prompts.clear()
 
     async def __call__(
         self,

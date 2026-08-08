@@ -50,7 +50,7 @@ async def on_add(cb: CallbackQuery, state: FSMContext, ui: FromDishka[Responder]
         return
     await state.set_state(Flow.new_name)
     await state.update_data(prompt_id=msg.message_id)
-    ui.edit(msg, "➕ Введите имя нового ученика:", cancel_kb())
+    ui.edit(msg, "➕ Введите имя нового ученика:", cancel_kb(), prompt_for=state.key)
     ui.callback(cb)
 
 
@@ -159,6 +159,7 @@ async def on_price(
         f"✏️ {s.name}\nТекущая стоимость: {format_money(s.price)}.\n\n"
         "Введите новую стоимость занятия:",
         cancel_kb(),
+        prompt_for=state.key,
     )
     ui.callback(cb)
 
@@ -215,7 +216,7 @@ async def on_search_start(cb: CallbackQuery, state: FSMContext, ui: FromDishka[R
         return
     await state.set_state(Flow.search)
     await state.update_data(prompt_id=msg.message_id)
-    ui.edit(msg, "🔍 Введите имя или его часть:", cancel_kb())
+    ui.edit(msg, "🔍 Введите имя или его часть:", cancel_kb(), prompt_for=state.key)
     ui.callback(cb)
 
 

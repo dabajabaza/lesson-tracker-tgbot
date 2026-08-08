@@ -44,6 +44,7 @@ async def on_pay(
         msg,
         f"💵 {s.name}\nСтоимость занятия: {format_money(s.price)}.{note}\n\nВведите сумму оплаты:",
         cancel_kb(),
+        prompt_for=state.key,
     )
     ui.callback(cb)
 

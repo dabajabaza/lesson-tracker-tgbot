@@ -69,6 +69,12 @@ class SqlAlchemyStorage(BaseStorage):
             if value is None:
                 return
             self._session.add(FsmRecord(key=row_key, state=value, data={}))
+        elif value is None and not rec.data:
+            # Пустая строка (нет ни состояния, ни данных) никому не нужна, а
+            # раньше жила вечно: clear() только обнулял поля, DELETE не делал
+            # никто, и каждый когда-либо открывавший диалог носил свою строку
+            # навсегда — её читали на каждом апдейте оба хранилища.
+            await self._session.delete(rec)
         else:
             rec.state = value
 
@@ -90,6 +96,10 @@ class SqlAlchemyStorage(BaseStorage):
             if not data:
                 return
             self._session.add(FsmRecord(key=row_key, state=None, data=dict(data)))
+        elif not data and rec.state is None:
+            # Второй шаг clear() (set_state(None) уже прошёл): строка пуста —
+            # удаляем, см. комментарий в set_state.
+            await self._session.delete(rec)
         else:
             rec.data = dict(data)  # новый объект — SQLAlchemy заметит изменение JSON
 
