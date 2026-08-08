@@ -13,6 +13,7 @@ Telegram подтверждает апдейт только следующим �
 
 from unittest.mock import patch
 
+from bot import access
 from bot.models import ProcessedUpdate
 from bot.services import StudentService
 from tests.bot_harness import make_update_message
@@ -107,3 +108,37 @@ async def test_старые_отметки_вычищаются(harness, session
     marks = await processed_update_ids(sessionmaker)
     assert 1 not in marks, "просроченная отметка должна быть удалена"
     assert marks, "свежая отметка текущего апдейта должна остаться"
+
+
+async def test_чужой_апдейт_не_пишет_в_базу(harness, sessionmaker):
+    """Спам не должен стоить строки в таблице и блокировки записи.
+
+    Бот находится в поиске Telegram по имени (L10), так что поток чужих
+    апдейтов — штатное явление. Отметка ставилась ДО обработчика, поэтому
+    каждое сообщение постороннего фиксировалось коммитом: таблица росла, а
+    общий замок записи, ради которого затевалось снятие потолка, тратился на
+    того, кому бот всё равно не отвечает. От следующего спам-сообщения с новым
+    update_id отметка при этом не спасает — платили ни за что.
+    """
+    await harness.dp.feed_update(
+        harness.bot, make_update_message("привет", user_id=999, update_id=4001)
+    )
+
+    assert harness.session.calls == [], "постороннему бот не отвечает"
+    assert await processed_update_ids(sessionmaker) == [], "и не пишет о нём в базу"
+
+
+async def test_допущенный_позже_обрабатывается_нормально(harness, sessionmaker):
+    """Отказ не должен «съедать» апдейт навсегда: отметки нет, значит повтор
+    того же update_id после выдачи доступа пройдёт как обычно."""
+    update = make_update_message("привет", user_id=999, update_id=4002)
+    await harness.dp.feed_update(harness.bot, update)
+    assert harness.session.calls == []
+
+    async with sessionmaker() as s:
+        await access.allow_user(s, 999, "vasya")
+        await s.commit()
+
+    await harness.dp.feed_update(harness.bot, update)
+    assert harness.session.calls, "допущенный обязан получить ответ"
+    assert 4002 in await processed_update_ids(sessionmaker), "теперь отметка нужна"
