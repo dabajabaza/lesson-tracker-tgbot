@@ -31,7 +31,7 @@ async def on_start(
 ) -> None:
     await state.clear()
     text, kb = await menu(students, prefs, owner(message))
-    ui.answer(message, text, reply_markup=kb)
+    ui.reply(message, text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "noop")
@@ -108,4 +108,4 @@ async def on_any_message(
     ui: FromDishka[Responder],
 ) -> None:
     text, kb = await menu(students, prefs, owner(message))
-    ui.answer(message, text, reply_markup=kb)
+    ui.reply(message, text, reply_markup=kb)

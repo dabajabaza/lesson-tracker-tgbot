@@ -86,7 +86,9 @@ async def on_undo_yes(
         )
         return
     assert res.op is not None  # status == "done" гарантирует операцию
-    ui.edit(msg, *await card_view(students, cb.from_user.id, res.op.student_id))
+    # durable: отмена операции — изменение баланса, и карточка о нём
+    # единственное свидетельство.
+    ui.edit(msg, *await card_view(students, cb.from_user.id, res.op.student_id), durable=True)
     ui.callback(cb, "✅ Действие отменено")
 
 

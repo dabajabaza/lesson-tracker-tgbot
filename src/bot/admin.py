@@ -36,6 +36,12 @@ async def _stop_dialog(state: FSMContext) -> None:
     оставался открытым: преподаватель нажимал «Внести оплату», вместо суммы
     набирал /invite — и следующее же число, отправленное по любому поводу,
     молча уходило в оплату этому ученику.
+
+    Зовётся ДО проверки прав, а не после. Апдейт поглощён этим роутером
+    независимо от того, админ его прислал или нет: фильтр Command срабатывает
+    для всех, а обработчик просто молчит в ответ непривилегированному. Пока
+    сброс стоял после проверки, допущенный неадмин (а таких впускает инвайт)
+    получал ровно ту же ловушку, от которой избавили админов.
     """
     await state.clear()
 
@@ -58,9 +64,9 @@ async def cmd_invite(
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
 ) -> None:
+    await _stop_dialog(state)
     if not _is_admin(message, admin_ids):
         return
-    await _stop_dialog(state)
     assert message.from_user is not None and message.bot is not None
 
     invite = await access.create_invite(session, message.from_user.id)
@@ -71,7 +77,7 @@ async def cmd_invite(
     me = await message.bot.me()
     link = f"https://t.me/{me.username}?start={invite.code}"
     hours = access.INVITE_TTL_SECONDS // 3600
-    ui.answer(
+    ui.confirm(
         message,
         f"Одноразовая ссылка (действует {hours} ч):\n\n"
         f"<code>{link}</code>\n\n"
@@ -90,21 +96,21 @@ async def cmd_allow(
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
 ) -> None:
+    await _stop_dialog(state)
     if not _is_admin(message, admin_ids):
         return
-    await _stop_dialog(state)
     assert message.from_user is not None
 
     args = (command.args or "").strip()
     # isdecimal, а не isdigit: последний истинен для символов вроде "³",
     # на которых int() потом падает.
     if not args.isdecimal():
-        ui.answer(message, _ALLOW_USAGE, parse_mode="HTML")
+        ui.reply(message, _ALLOW_USAGE, parse_mode="HTML")
         return
 
     user_id = int(args)
     await access.allow_user(session, user_id, invited_by=message.from_user.id)
-    ui.answer(message, f"Пользователь <code>{user_id}</code> допущен.", parse_mode="HTML")
+    ui.confirm(message, f"Пользователь <code>{user_id}</code> допущен.", parse_mode="HTML")
     log.info("Доступ выдан вручную: admin=%s user_id=%s", message.from_user.id, user_id)
 
 
@@ -117,9 +123,9 @@ async def cmd_access(
     ui: FromDishka[Responder],
 ) -> None:
     """Показать, кто допущен и какие приглашения ещё не погашены."""
+    await _stop_dialog(state)
     if not _is_admin(message, admin_ids):
         return
-    await _stop_dialog(state)
 
     rows = list(await session.scalars(select(AllowedUser)))
     live = list(
@@ -138,4 +144,4 @@ async def cmd_access(
         lines.append("\n<b>Допущены</b>: никого (кроме админов)")
     lines.append(f"\n<b>Непогашенных приглашений</b>: {len(live)}")
 
-    ui.answer(message, "\n".join(lines), parse_mode="HTML")
+    ui.reply(message, "\n".join(lines), parse_mode="HTML")

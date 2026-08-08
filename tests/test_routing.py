@@ -9,7 +9,8 @@ import asyncio
 
 from sqlalchemy import select
 
-from bot.models import FsmRecord, Student
+from bot import access
+from bot.models import FsmRecord, Operation, Student
 from bot.services import StudentService
 from tests.bot_harness import make_update_message
 from tests.reading import last_callback_answer, student_names
@@ -123,8 +124,41 @@ async def test_админская_команда_прерывает_начаты
 
     await harness.click(f"pay:{a.id}", user_id=ADMIN)
     await harness.send("/access", user_id=ADMIN)
-    await harness.send("500", user_id=ADMIN)
+    # Сумма заведомо больше стоимости занятия: будь диалог жив, оплата
+    # применилась бы и это было бы видно и по балансу, и по журналу операций.
+    await harness.send("1600", user_id=ADMIN)
 
     async with sessionmaker() as s:
         fresh = await StudentService(s).get(ADMIN, a.id)
+        operations = list(await s.scalars(select(Operation)))
     assert fresh.balance == 0, "число после админской команды не должно стать оплатой"
+    assert operations == [], "и в журнале операций взяться неоткуда"
+
+
+async def test_админская_команда_прерывает_диалог_и_у_неадмина(harness, session, sessionmaker):
+    """Роутер админки поглощает команду у кого угодно — значит и диалог обязан
+    сбрасывать у кого угодно.
+
+    Фильтр Command срабатывает для всех, привилегии проверяет уже обработчик.
+    Пока сброс стоял после проверки прав, допущенный неадмин (их впускает
+    инвайт) попадал в ту же ловушку, от которой избавили админов: команда
+    молча съедена, диалог оплаты жив, следующее число уходит в оплату.
+    """
+    guest = 555
+    async with sessionmaker() as s:
+        await access.allow_user(s, guest, "гость")
+        await s.commit()
+
+    students = StudentService(session)
+    a = await students.create(guest, "Аня", 160000)
+    await session.commit()
+
+    await harness.click(f"pay:{a.id}", user_id=guest)
+    await harness.send("/access", user_id=guest)
+    await harness.send("1600", user_id=guest)
+
+    async with sessionmaker() as s:
+        fresh = await StudentService(s).get(guest, a.id)
+        operations = list(await s.scalars(select(Operation)))
+    assert fresh.balance == 0, "число после админской команды не должно стать оплатой"
+    assert operations == [], "и в журнале операций взяться неоткуда"
