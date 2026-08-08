@@ -13,11 +13,12 @@
 
 import asyncio
 import logging
+import time
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.methods import SendMessage, TelegramMethod
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .models import OutboxMessage, now_ts
@@ -29,6 +30,9 @@ log = logging.getLogger(__name__)
 POLL_INTERVAL = 5.0
 # Сколько строк забирать за раз — чтобы длинная очередь не держала замок.
 BATCH = 20
+# Как часто выносить просроченное. Не на каждом тике: это запись под общим
+# замком, а таблица штатно пуста.
+PURGE_EVERY = 3600
 # Пауза перед повтором: 60с, 2м, 4м… с потолком в час.
 BACKOFF_BASE = 30
 BACKOFF_MAX = 3600
@@ -120,13 +124,29 @@ async def deliver_batch(
     async with lock, sessionmaker() as session:
         if done:
             await session.execute(delete(OutboxMessage).where(OutboxMessage.id.in_(done)))
-        for row_id, attempts, when in retry:
-            row = await session.get(OutboxMessage, row_id)
-            if row is not None:
-                row.attempts = attempts
-                row.next_attempt_at = when
+        # Одним UPDATE на группу, а не по строке. Строки уже прочитаны выше, и
+        # повторные SELECT'ы (до BATCH штук) держали бы общий замок на ровном
+        # месте — как раз тогда, когда очередь полна после сбоя связи.
+        for when, group in _grouped_by_time(retry):
+            await session.execute(
+                update(OutboxMessage)
+                .where(OutboxMessage.id.in_([row_id for row_id, _ in group]))
+                .values(next_attempt_at=when, attempts=group[0][1])
+            )
         await session.commit()
     return sent
+
+
+def _grouped_by_time(retry: list[tuple[int, int, int]]):
+    """Группы (когда повторить, [(id, попытка)…]) — по одинаковому сроку.
+
+    Строки из одной пачки почти всегда получают один и тот же срок и одну и ту
+    же попытку, так что групп выходит одна-две.
+    """
+    groups: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for row_id, attempts, when in retry:
+        groups.setdefault((when, attempts), []).append((row_id, attempts))
+    return [(when, rows) for (when, _attempts), rows in groups.items()]
 
 
 async def purge_expired(sessionmaker: async_sessionmaker[AsyncSession], lock: asyncio.Lock) -> None:
@@ -154,9 +174,16 @@ async def run_sender(
     lock — тот же замок записи, что и у middleware: писатель в SQLite один, и
     фоновая задача не исключение.
     """
+    purged_at = 0.0
     while True:
         try:
-            await purge_expired(sessionmaker, lock)
+            # Уборка — раз в час, как и чистка отметок идемпотентности
+            # (middlewares._PRUNE_EVERY). На каждом тике она открывала запись
+            # под общим замком 17 тысяч раз в сутки — ради таблицы, которая в
+            # штатном режиме пуста.
+            if time.monotonic() - purged_at >= PURGE_EVERY:
+                await purge_expired(sessionmaker, lock)
+                purged_at = time.monotonic()
             await deliver_batch(bot, sessionmaker, lock)
         except asyncio.CancelledError:
             raise

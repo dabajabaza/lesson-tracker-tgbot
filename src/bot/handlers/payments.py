@@ -13,7 +13,7 @@ from ..services import PaymentService, StudentService, ViewPrefService
 from ..states import Flow
 from ..ui import Responder
 from ..views import card_view
-from ._common import as_int, menu, message_of, money_error, owner, parts_of
+from ._common import as_int, menu, message_of, money_error, owner, parts_of, target_of
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -100,6 +100,32 @@ async def on_payment_amount(
     )
 
 
+async def _shift(
+    cb: CallbackQuery,
+    ui: Responder,
+    students: StudentService,
+    apply,
+    toast,
+) -> None:
+    """Общая форма списания и возврата: оба меняют баланс на один урок и
+    отчитываются карточкой плюс тостом. Различаются ровно двумя вещами —
+    методом сервиса и текстом тоста, — и держать это двумя почти одинаковыми
+    обработчиками значило чинить их по очереди и однажды забыть один.
+    """
+    target = target_of(cb, ui)
+    if target is None:
+        return
+    msg, sid = target
+    s = await apply(cb.from_user.id, sid)
+    if not s:
+        ui.callback(cb, "Ученик не найден", show_alert=True)
+        return
+    # durable: карточка здесь — единственное подтверждение операции с балансом,
+    # тост гаснет сам и в очередь не идёт.
+    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id), durable=True)
+    ui.callback(cb, toast(s))
+
+
 @router.callback_query(F.data.startswith("charge:"))
 async def on_charge(
     cb: CallbackQuery,
@@ -107,24 +133,16 @@ async def on_charge(
     students: FromDishka[StudentService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    _cmd, a1, _a2 = parts_of(cb)
-    sid = as_int(a1)
-    if msg is None or sid is None:
-        ui.callback(cb, "Кнопка устарела", show_alert=True)
-        return
-    s = await payments.charge(cb.from_user.id, sid)
-    if not s:
-        ui.callback(cb, "Ученик не найден", show_alert=True)
-        return
-    # durable: карточка здесь — единственное подтверждение списания/возврата,
-    # тост гаснет сам и в очередь не идёт.
-    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id), durable=True)
-    ui.callback(
+    await _shift(
         cb,
-        f"⚠️ Урок списан. Долг: {abs(s.balance)}"
-        if s.balance < 0
-        else f"➖ Урок списан. Осталось: {s.balance}",
+        ui,
+        students,
+        payments.charge,
+        lambda s: (
+            f"⚠️ Урок списан. Долг: {abs(s.balance)}"
+            if s.balance < 0
+            else f"➖ Урок списан. Осталось: {s.balance}"
+        ),
     )
 
 
@@ -135,17 +153,10 @@ async def on_refund(
     students: FromDishka[StudentService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    _cmd, a1, _a2 = parts_of(cb)
-    sid = as_int(a1)
-    if msg is None or sid is None:
-        ui.callback(cb, "Кнопка устарела", show_alert=True)
-        return
-    s = await payments.refund(cb.from_user.id, sid)
-    if not s:
-        ui.callback(cb, "Ученик не найден", show_alert=True)
-        return
-    # durable: карточка здесь — единственное подтверждение списания/возврата,
-    # тост гаснет сам и в очередь не идёт.
-    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id), durable=True)
-    ui.callback(cb, f"↩️ Урок возвращён. Осталось: {s.balance}")
+    await _shift(
+        cb,
+        ui,
+        students,
+        payments.refund,
+        lambda s: f"↩️ Урок возвращён. Осталось: {s.balance}",
+    )

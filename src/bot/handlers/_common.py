@@ -53,6 +53,23 @@ def owner(message: Message) -> int:
     return user.id
 
 
+def target_of(cb: CallbackQuery, ui) -> tuple[Message, int] | None:
+    """Сообщение под кнопкой и id из callback_data — или None с внятным отказом.
+
+    Четыре строки этой проверки были скопированы в восьми обработчиках; именно
+    она защищает от подделанного клиентом callback_data, то есть место, где
+    пропущенная копия обходится дороже всего. Побочно здесь же гасятся
+    «часики»: без ответа кнопка крутилась бы вечно.
+    """
+    msg = message_of(cb)
+    _cmd, a1, _a2 = parts_of(cb)
+    sid = as_int(a1)
+    if msg is None or sid is None:
+        ui.callback(cb, "Кнопка устарела", show_alert=True)
+        return None
+    return msg, sid
+
+
 def message_of(cb: CallbackQuery) -> Message | None:
     """Сообщение под кнопкой, если с ним ещё можно работать.
 

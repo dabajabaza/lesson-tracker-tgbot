@@ -50,8 +50,10 @@ def _read_admin_ids() -> frozenset[int]:
     if not raw:
         return frozenset()
     try:
-        # isdecimal, а не isdigit: последний истинен для символов вроде "³",
-        # которые int() затем отвергает.
+        # Разбор без предварительной проверки формы: здесь она не нужна.
+        # Мусор вроде "³" ловит сам int(), и except ниже превращает его во
+        # внятный отказ старта — в отличие от /allow (admin.py), где ответить
+        # надо подсказкой, а не падением, и потому проверка стоит заранее.
         return frozenset(int(chunk) for chunk in (c.strip() for c in raw.split(",")) if chunk)
     except ValueError as exc:
         raise RuntimeError(

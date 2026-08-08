@@ -1,5 +1,7 @@
 """Тесты контроля доступа: белый список, админы, одноразовые приглашения.
-Фикстура session — в conftest.py (настоящий SQLite in-memory)."""
+Фикстура session — в conftest.py: личная файловая копия базы, собранной
+настоящими миграциями (см. L8). Не in-memory — файл нужен и для копирования
+шаблона, и для проб вторым соединением."""
 
 from bot import access
 from bot.models import AllowedUser, Invite, now_ts

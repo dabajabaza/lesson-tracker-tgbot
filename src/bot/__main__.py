@@ -25,7 +25,7 @@ from dishka.integrations.aiogram import ContainerMiddleware, inject_router
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .admin import router as admin_router
-from .config import ROOT, load_config
+from .config import ROOT, Config, load_config
 from .di import build_container
 from .handlers import router
 from .middlewares import AccessMiddleware, DbSessionMiddleware, FsmSessionMiddleware
@@ -173,7 +173,9 @@ def _run_migrations(db_url: str) -> None:
     command.upgrade(cfg, "head")
 
 
-def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Dispatcher:
+def build_dispatcher(
+    container: AsyncContainer, admin_ids: frozenset[int], write_lock: asyncio.Lock | None = None
+) -> Dispatcher:
     """Собирает диспетчер в том единственном порядке, который имеет значение.
 
     Отдельная функция, а не тело main(), потому что этим же путём диспетчер
@@ -188,8 +190,9 @@ def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Di
     message-уровня) с двумя разными сессиями — второй писатель, от которого
     мы только что избавились, вернулся бы через чёрный ход. Проверено по
     исходникам dishka 1.10.1 (integrations/aiogram.py: цикл по всем
-    router.observers). auto_inject не используется: обработчики берут session
-    из data, FromDishka-инъекций в них нет.
+    router.observers). auto_inject не используется, но инъекции — да: их
+    навешивает явный inject_router(dp) в конце (L12). Обработчики объявляют
+    FromDishka[...] и без этого вызова упадут на диспетчеризации.
     """
     # Хранилище диспетчера — только чтение (raw_state для фильтров): встроенный
     # FSMContextMiddleware aiogram читает его ДО открытия области запроса.
@@ -199,11 +202,12 @@ def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Di
     dp["admin_ids"] = admin_ids
 
     dp.update.outer_middleware(ContainerMiddleware(container))
-    # Один замок записи на процесс: его же берёт фоновый отправщик очереди.
-    # Кладём в данные диспетчера, чтобы точка входа могла до него дотянуться.
-    write_lock = asyncio.Lock()
-    dp["write_lock"] = write_lock
-    dp.update.middleware(DbSessionMiddleware(write_lock))
+    # Один замок записи на процесс, и это инвариант L4, а не деталь: тот же
+    # объект берёт фоновый отправщик очереди. Передаётся параметром, а не
+    # добирается вызывающим из dp[...] по строковому ключу: опечатка в ключе
+    # или второй Lock «по умолчанию» тихо расщепили бы единственного писателя
+    # на двух, и замок перестал бы что-либо гарантировать.
+    dp.update.middleware(DbSessionMiddleware(write_lock or asyncio.Lock()))
     # После DbSessionMiddleware: хранилище должно получить ту же сессию из
     # кэша области запроса.
     dp.update.middleware(FsmSessionMiddleware())
@@ -226,15 +230,15 @@ def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Di
     return dp
 
 
-async def _run_bot() -> None:
-    cfg = load_config()
+async def _run_bot(cfg: Config) -> None:
 
     container = build_container(cfg)
 
     session = AiohttpSession(proxy=cfg.proxy, timeout=_SESSION_TIMEOUT)
     bot = Bot(token=cfg.token, session=session)
 
-    dp = build_dispatcher(container, cfg.admin_ids)
+    write_lock = asyncio.Lock()
+    dp = build_dispatcher(container, cfg.admin_ids, write_lock)
 
     if not cfg.admin_ids:
         logging.warning(
@@ -254,7 +258,7 @@ async def _run_bot() -> None:
     # Дожимает ответы, чья отправка не состоялась (обычно — потому что процесс
     # умер между коммитом и отправкой; деплой убивает бота намеренно).
     sessionmaker = await container.get(async_sessionmaker[AsyncSession])
-    sender = asyncio.create_task(run_sender(bot, sessionmaker, dp["write_lock"]))
+    sender = asyncio.create_task(run_sender(bot, sessionmaker, write_lock))
     try:
         await dp.start_polling(
             bot,
@@ -291,7 +295,7 @@ def main() -> None:
     cfg = load_config()
     logging.info("Применяю миграции БД")
     _run_migrations(cfg.db_url)
-    asyncio.run(_run_bot())
+    asyncio.run(_run_bot(cfg))
 
 
 if __name__ == "__main__":

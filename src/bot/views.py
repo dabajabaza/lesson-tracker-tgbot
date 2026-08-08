@@ -24,7 +24,9 @@ SORT_LABELS = {"name": "по имени", "bal": "по остатку занят
 MAX_SEARCH_RESULTS = 20
 
 
-async def main_menu_view(students: StudentService, owner_id: int, sort="name", page=0):
+async def main_menu_view(
+    students: StudentService, owner_id: int, sort: str = "name", page: int = 0
+) -> tuple[str, InlineKeyboardMarkup]:
     rows = await students.list_all(owner_id, sort)
     if not rows:
         return (
@@ -38,7 +40,9 @@ async def main_menu_view(students: StudentService, owner_id: int, sort="name", p
     return text, main_menu_kb(chunk, sort, page, total_pages)
 
 
-async def card_view(students: StudentService, owner_id: int, sid: int):
+async def card_view(
+    students: StudentService, owner_id: int, sid: int
+) -> tuple[str, InlineKeyboardMarkup]:
     s = await students.get(owner_id, sid)
     if not s:
         return "Ученик не найден.", home_kb()
@@ -47,7 +51,7 @@ async def card_view(students: StudentService, owner_id: int, sid: int):
 
 async def history_view(
     students: StudentService, history: HistoryService, owner_id: int, sid: int, page: int = 0
-):
+) -> tuple[str, InlineKeyboardMarkup]:
     s = await students.get(owner_id, sid)
     if not s:
         return "Ученик не найден.", home_kb()
@@ -61,7 +65,7 @@ async def history_view(
     return f"📜 История: {s.name}\n\n{body}", history_kb(sid, page, total_pages)
 
 
-def search_results_view(found, query):
+def search_results_view(found, query) -> tuple[str, InlineKeyboardMarkup]:
     shown = found[:MAX_SEARCH_RESULTS]
     rows = [
         [InlineKeyboardButton(text=list_button_label(s), callback_data=f"card:{s.id}")]

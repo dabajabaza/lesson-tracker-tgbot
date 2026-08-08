@@ -249,7 +249,6 @@ class FsmSessionMiddleware(BaseMiddleware):
             container: AsyncContainer = data["dishka_container"]
             storage = await container.get(BaseStorage)
             data["state"] = FSMContext(storage=storage, key=state.key)
-            data["fsm_storage"] = storage
             data["raw_state"] = await storage.get_state(state.key)
         return await handler(event, data)
 
@@ -276,9 +275,6 @@ class _DenialLog:
         else:
             self._seen.add(key)
             log.warning(message, *args)
-
-
-_denials = _DenialLog()
 
 
 def _invite_code_from_start(event: TelegramObject) -> str | None:
@@ -316,6 +312,11 @@ class AccessMiddleware(BaseMiddleware):
 
     def __init__(self, admin_ids: frozenset[int]) -> None:
         self.admin_ids = admin_ids
+        # Свой на экземпляр, а не модульный синглтон: иначе состояние
+        # рейт-лимита переживает пересборку диспетчера и течёт между тестами —
+        # отказ, записанный в одном, глушит WARNING в другом, и проверка
+        # «первый отказ виден в логе» проходит или падает от порядка запуска.
+        self._denials = _DenialLog()
 
     async def __call__(
         self,
@@ -339,7 +340,7 @@ class AccessMiddleware(BaseMiddleware):
                 log.info("Инвайт погашен: user_id=%s username=%s", user.id, user.username)
 
         if not allowed:
-            _denials.log(
+            self._denials.log(
                 user.id,
                 "Отказано в доступе: user_id=%s username=%s тип=%s инвайт=%s",
                 user.id,
