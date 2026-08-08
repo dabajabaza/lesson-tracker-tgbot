@@ -74,6 +74,12 @@ class RecordingSession(BaseSession):
         return [m for m in self.calls if type(m).__name__ == name]
 
     def sent_texts(self) -> list[str]:
+        """Тексты ВСЕХ вызовов с полем text — и правок, и упавших.
+
+        Вызов записывается до того, как сработает fail_on, поэтому по этому
+        списку нельзя отличить «пользователь увидел» от «мы пытались
+        отправить». Там, где разница важна, берите calls_of("SendMessage").
+        """
         return [text for m in self.calls if (text := getattr(m, "text", None)) is not None]
 
     def clear(self) -> None:

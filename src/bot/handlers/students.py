@@ -65,14 +65,14 @@ async def on_new_name(
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        ui.answer(message, "Введите имя ученика:", reply_markup=cancel_kb())
+        ui.reply(message, "Введите имя ученика:", reply_markup=cancel_kb())
         return
     name = re.sub(r"\s+", " ", text).strip()
     if len(name) > MAX_NAME_LEN:
-        ui.answer(message, "⚠️ Слишком длинное имя. Введите короче:", reply_markup=cancel_kb())
+        ui.reply(message, "⚠️ Слишком длинное имя. Введите короче:", reply_markup=cancel_kb())
         return
     if await students.find_by_name(owner(message), name):
-        ui.answer(
+        ui.reply(
             message,
             f"⚠️ Ученик с именем «{name}» уже существует. Введите другое имя:",
             reply_markup=cancel_kb(),
@@ -85,7 +85,7 @@ async def on_new_name(
     # Единственное место, где нужен id ЕЩЁ НЕ отправленного сообщения: этот
     # ответ сам становится подсказкой, которую следующий шаг обязан убрать.
     # Responder допишет prompt_id в состояние сразу после отправки.
-    ui.answer(
+    ui.reply(
         message,
         f"Имя: {name}\n\nТеперь введите стоимость одного занятия, например: 1600",
         reply_markup=cancel_kb(),
@@ -102,11 +102,11 @@ async def on_new_price(
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        ui.answer(message, "Введите стоимость занятия:", reply_markup=cancel_kb())
+        ui.reply(message, "Введите стоимость занятия:", reply_markup=cancel_kb())
         return
     parsed = parse_money_strict(text)
     if parsed.error or parsed.value is None:
-        ui.answer(
+        ui.reply(
             message,
             money_error("price", parsed.error or "format", "1600"),
             reply_markup=cancel_kb(),
@@ -118,18 +118,18 @@ async def on_new_price(
         # Состояние потерялось между шагами — просим имя заново, а не роняем
         # обработчик на name=None внутри сервиса.
         await state.set_state(Flow.new_name)
-        ui.answer(message, "Введите имя ученика:", reply_markup=cancel_kb())
+        ui.reply(message, "Введите имя ученика:", reply_markup=cancel_kb())
         return
     student = await students.create(owner(message), name, parsed.value)
     if not student:
         await state.set_state(Flow.new_name)
-        ui.answer(
+        ui.reply(
             message, f"⚠️ Имя «{name}» уже занято. Введите другое имя:", reply_markup=cancel_kb()
         )
         return
     await state.clear()
     ui.delete(message.chat.id, data.get("prompt_id"))
-    ui.answer(
+    ui.confirm(
         message,
         f"✅ Ученик добавлен.\n\n{render_card(student)}",
         reply_markup=card_kb(student.id),
@@ -177,11 +177,11 @@ async def on_price_change(
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        ui.answer(message, "Введите новую стоимость занятия:", reply_markup=cancel_kb())
+        ui.reply(message, "Введите новую стоимость занятия:", reply_markup=cancel_kb())
         return
     parsed = parse_money_strict(text)
     if parsed.error or parsed.value is None:
-        ui.answer(
+        ui.reply(
             message,
             money_error("price", parsed.error or "format", "1800"),
             reply_markup=cancel_kb(),
@@ -198,9 +198,9 @@ async def on_price_change(
     ui.delete(message.chat.id, data.get("prompt_id"))
     if not s:
         text, kb = await menu(students, prefs, owner(message))
-        ui.answer(message, text, reply_markup=kb)
+        ui.reply(message, text, reply_markup=kb)
         return
-    ui.answer(
+    ui.confirm(
         message,
         f"✅ Стоимость изменена: {format_money(parsed.value)}.\n"
         f"Применяется только к будущим оплатам.\n\n{render_card(s)}",
@@ -232,11 +232,11 @@ async def on_search(
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        ui.answer(message, "Введите имя или его часть:", reply_markup=cancel_kb())
+        ui.reply(message, "Введите имя или его часть:", reply_markup=cancel_kb())
         return
     found = await students.search(owner(message), text)
     data = await state.get_data()
     await state.clear()
     ui.delete(message.chat.id, data.get("prompt_id"))
     view_text, kb = search_results_view(found, text)
-    ui.answer(message, view_text, reply_markup=kb)
+    ui.reply(message, view_text, reply_markup=kb)

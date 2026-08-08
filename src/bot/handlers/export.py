@@ -57,7 +57,7 @@ async def _send_export(
     rows = await students.list_all(uid, "name")
     ops = await history.all_operations(uid)
     if not rows and not ops:
-        ui.answer(msg, "Экспортировать нечего — данных пока нет.")
+        ui.reply(msg, "Экспортировать нечего — данных пока нет.")
         return
     names = {s.id: s.name for s in rows}
     srows = students_rows(rows)

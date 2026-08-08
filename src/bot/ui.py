@@ -35,6 +35,11 @@ from .models import OutboxMessage, now_ts
 
 log = logging.getLogger(__name__)
 
+# Часовой «не доставлено»: отличает провал от законного None, который
+# возвращают терпимые к ошибке вызовы (не изменившаяся правка, погасшие
+# «часики»).
+_FAILED = object()
+
 # Сколько строка outbox «принадлежит» штатной отправке, прежде чем её увидит
 # фоновый отправщик. С запасом больше круга до Telegram и тика поллера.
 OUTBOX_GRACE = 60
@@ -69,6 +74,10 @@ class _Pending:
     durable: bool = False
     # id строки outbox, проставляется при записи в транзакцию.
     outbox_id: int | None = None
+    # Чем заменить вызов, если он не прошёл. Отправкой, и только ею: сообщение
+    # можно добавить в чат в любой момент, ничего не затерев, — в отличие от
+    # правки, которая перерисовывает конкретный экран.
+    fallback: SendMessage | None = None
 
 
 class Responder:
@@ -85,7 +94,15 @@ class Responder:
         # Заполняется сливом, читается middleware: (ключ FSM, id подсказки).
         self.prompt_updates: list[tuple[StorageKey, int]] = []
 
-    def answer(
+    def _message(
+        self, chat_id: int, text: str, reply_markup: Any, parse_mode: str | None
+    ) -> SendMessage:
+        # parse_mode передаём только когда он задан: иначе поле стало бы
+        # «явно None», то есть запретом на разметку, вместо умолчания бота.
+        extra: dict[str, Any] = {"parse_mode": parse_mode} if parse_mode else {}
+        return SendMessage(chat_id=chat_id, text=text, reply_markup=reply_markup, **extra)
+
+    def reply(
         self,
         message: Message,
         text: str,
@@ -94,23 +111,55 @@ class Responder:
         parse_mode: str | None = None,
         prompt_for: StorageKey | None = None,
     ) -> None:
-        """Новое сообщение в тот же чат.
+        """Сообщение, рисующее экран: подсказка, меню, список, замечание о вводе.
+
+        НЕ персистентно. Такой текст осмысленен только сейчас: доставленное
+        через минуту «Введите стоимость занятия:» приходит в чат, где диалога
+        уже нет, — пользователь успел нажать «❌ Отмена» и заняться другим, а
+        его следующая фраза уходит в пустоту. Это ровно та беда, из-за которой
+        из очереди убраны правки экрана; текст подсказки ничем от них не
+        отличается.
 
         prompt_for — для потоков, где ответ сам становится подсказкой и его id
         нужен следующему шагу, чтобы её удалить.
         """
-        # parse_mode передаём только когда он задан: иначе поле стало бы
-        # «явно None», то есть запретом на разметку, вместо умолчания бота.
-        extra: dict[str, Any] = {"parse_mode": parse_mode} if parse_mode else {}
         self._queue.append(
             _Pending(
-                SendMessage(chat_id=message.chat.id, text=text, reply_markup=reply_markup, **extra),
+                self._message(message.chat.id, text, reply_markup, parse_mode),
                 prompt_for=prompt_for,
+            )
+        )
+
+    def confirm(
+        self,
+        message: Message,
+        text: str,
+        *,
+        reply_markup: Any = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        """Сообщение, несущее результат уже зафиксированной операции.
+
+        Персистентно: обязано дойти, пусть и позже. Не увидев подтверждения,
+        преподаватель вводит сумму заново — и оплата задваивается, а это для
+        денег хуже, чем дубль сообщения.
+
+        Отдельный метод, а не флаг у reply: разница здесь смысловая, и
+        оставлять её на умолчании нельзя ни в ту, ни в другую сторону. Пока
+        персистентным было всё подряд, очередь дожимала подсказки диалога;
+        стоило бы сделать умолчанием обратное — молча терялись бы
+        подтверждения оплат.
+        """
+        self._queue.append(
+            _Pending(
+                self._message(message.chat.id, text, reply_markup, parse_mode),
                 durable=True,
             )
         )
 
-    def edit(self, message: Message, text: str, reply_markup: Any = None) -> None:
+    def edit(
+        self, message: Message, text: str, reply_markup: Any = None, *, durable: bool = False
+    ) -> None:
         """Правка сообщения, терпимая к повторному нажатию той же кнопки.
 
         НЕ персистентна, в отличие от отправки. Правка — это состояние экрана в
@@ -120,10 +169,17 @@ class Responder:
         правка вернула ему карточку ученика поверх списка — с устаревшим
         балансом и старыми кнопками. Очередь несёт сообщения, а не экраны.
 
-        Плата: не доставленная правка карточки не будет повторена. Операция при
-        этом применена, а следующий экран покажет правду — цена меньше, чем у
-        отката пользователя в прошлое.
+        Не прошла — содержимое уходит тем же сливом отдельным сообщением
+        (fallback). Так экран не затирается задним числом, а пользователь всё
+        равно видит то, что должен: сорванная правка больше не оставляет ни
+        невидимого диалога, ни устаревшей карточки.
+
+        durable=True — когда правка несёт результат зафиксированной операции
+        (списание, возврат, отмена). Тогда запасное сообщение ещё и попадает в
+        очередь: правку нельзя воспроизвести позже, не отбросив человека на
+        покинутый экран, а сообщение — можно.
         """
+        fallback = self._message(message.chat.id, text, reply_markup, None)
         self._queue.append(
             _Pending(
                 EditMessageText(
@@ -133,6 +189,8 @@ class Responder:
                     reply_markup=reply_markup,
                 ),
                 on_error="not_modified",
+                durable=durable,
+                fallback=fallback,
             )
         )
 
@@ -154,8 +212,25 @@ class Responder:
     def document(
         self, message: Message, document: InputFile, *, caption: str | None = None
     ) -> None:
+        """Файл выгрузки. В очередь не идёт: это мегабайты, которым нечего
+        делать в базе, а повторить выгрузку пользователь может сам.
+
+        Зато о провале он узнаёт — запасным сообщением. Раньше сбой поднимался
+        наверх, но до человека не доходил: ответ на нажатие кнопки к тому
+        моменту уже отправлен, а Telegram принимает его ровно один раз, так что
+        обработчик ошибок молча получал отказ. Пользователь видел остановившиеся
+        «часики» и ничего больше.
+        """
         self._queue.append(
-            _Pending(SendDocument(chat_id=message.chat.id, document=document, caption=caption))
+            _Pending(
+                SendDocument(chat_id=message.chat.id, document=document, caption=caption),
+                fallback=self._message(
+                    message.chat.id,
+                    "⚠️ Не получилось отправить файл. Попробуйте выгрузить ещё раз.",
+                    None,
+                    None,
+                ),
+            )
         )
 
     def delete(self, chat_id: int, message_id: int | None) -> None:
@@ -168,10 +243,6 @@ class Responder:
                 on_error="quiet",
             )
         )
-
-    def pending(self) -> int:
-        """Сколько намерений ждёт отправки — для тестов и диагностики."""
-        return len(self._queue)
 
     async def persist(self, session: AsyncSession) -> None:
         """Записать обещания доставки в ту же транзакцию, что и операцию.
@@ -187,18 +258,28 @@ class Responder:
         # бы один и тот же ответ дважды в обычном режиме, а не после падения.
         # Отправщик обязан видеть только то, что штатный путь уже не удалит.
         due = now_ts() + OUTBOX_GRACE
-        rows = [
-            (
-                item,
-                OutboxMessage(
-                    method=type(item.method).__name__,
-                    payload=_dump(item.method),
-                    next_attempt_at=due,
-                ),
+        rows = []
+        for item in self._queue:
+            if not item.durable:
+                continue
+            # Персистентна всегда ОТПРАВКА: у правки берём её запасное
+            # сообщение. Это не деталь реализации, а свойство: воспроизвести
+            # позже можно только то, что ничего не затирает. Проверка тут же —
+            # чтобы будущий durable-вызов другого типа сломался здесь, а не в
+            # отправщике, который не смог бы такую строку оживить.
+            method = item.fallback or item.method
+            if not isinstance(method, SendMessage):
+                raise TypeError(f"В очередь доставки годится только SendMessage, а не {method!r}")
+            rows.append(
+                (
+                    item,
+                    OutboxMessage(
+                        method=type(method).__name__,
+                        payload=_dump(method),
+                        next_attempt_at=due,
+                    ),
+                )
             )
-            for item in self._queue
-            if item.durable
-        ]
         if not rows:
             return
         session.add_all([row for _item, row in rows])
@@ -231,33 +312,46 @@ class Responder:
         могло уйти. Ловим Exception целиком, а не TelegramAPIError — апдейт уже
         применён, и никакая беда доставки не имеет права его отменить.
 
-        Но молчать можно не про всякий сбой. Персистентный вызов дожмёт
-        отправщик, косметический никому не нужен — а вот потерянный документ
-        пользователь не получит никогда, и сделать вид, что всё хорошо, значит
-        солгать. Такой сбой поднимается наверх ПОСЛЕ того, как остальная
-        очередь ушла: обработчик ошибок aiogram скажет человеку правду.
+        Наверх отсюда ничего не поднимается. Раньше поднималось — и это была
+        ошибка: сорванная правка экрана превращалась в «Не получилось выполнить
+        действие» поверх успешно применённого списания, то есть приглашала
+        списать урок второй раз. Вместо эскалации у вызова есть запасной
+        вариант: содержимое уходит отдельным сообщением. Оно ничего не затирает
+        и доходит до человека без помощи обработчика ошибок — которому,
+        к слову, ответить уже нечем, если «часики» на кнопке погашены.
         """
         queued, self._queue = self._queue, []
-        lost: Exception | None = None
         for item in queued:
-            try:
-                result = await self._send(bot, item)
-            except Exception as exc:
-                log.warning(
-                    "Не удалось отправить %s%s",
-                    type(item.method).__name__,
-                    " — останется в очереди" if item.outbox_id else "",
-                    exc_info=True,
-                )
-                if item.outbox_id is None and item.on_error != "quiet":
-                    lost = lost or exc
+            result = await self._deliver(bot, item)
+            if result is _FAILED:
                 continue
             if item.outbox_id is not None:
                 self._delivered.append(item.outbox_id)
             if item.prompt_for is not None and isinstance(result, Message):
                 self.prompt_updates.append((item.prompt_for, result.message_id))
-        if lost is not None:
-            raise lost
+
+    async def _deliver(self, bot: Bot, item: _Pending) -> Any:
+        """Отправить намерение, при неудаче — его запасной вариант."""
+        try:
+            return await self._send(bot, item)
+        except Exception:
+            log.warning(
+                "Не удалось отправить %s%s",
+                type(item.method).__name__,
+                "" if item.fallback is None else " — пробую отдельным сообщением",
+                exc_info=True,
+            )
+        if item.fallback is None:
+            return _FAILED
+        try:
+            return await bot(item.fallback)
+        except Exception:
+            log.warning(
+                "Запасное сообщение тоже не ушло%s",
+                " — останется в очереди" if item.outbox_id else "",
+                exc_info=True,
+            )
+            return _FAILED
 
     @staticmethod
     async def _send(bot: Bot, item: _Pending) -> Any:

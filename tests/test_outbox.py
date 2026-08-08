@@ -195,12 +195,16 @@ async def test_нечитаемое_обещание_не_застревает(h
     assert await queued_messages(sessionmaker) == []
 
 
-async def test_провал_выгрузки_не_выдаётся_за_успех(harness, session):
-    """Документ не персистентен: не ушёл — значит потерян навсегда.
+async def test_провал_выгрузки_виден_пользователю(harness, session):
+    """Документ не персистентен: не ушёл — значит потерян навсегда, и сказать
+    об этом надо сообщением, а не через обработчик ошибок.
 
-    Молчать об этом нельзя. Раньше тост «Готово» стоял в очереди после
-    документов и уходил независимо от их судьбы: пользователь видел успех и
-    не получал файла.
+    Две ошибки подряд были в этом месте. Сначала тост «Готово» уходил
+    независимо от судьбы файлов — пользователь видел успех и не получал
+    ничего. Потом провал стали поднимать наверх, но до человека он всё равно
+    не доходил: ответ на нажатие кнопки Telegram принимает ровно один раз, а
+    он к тому моменту уже отправлен, так что обработчик ошибок молча получал
+    отказ и пользователь видел просто остановившиеся «часики».
     """
     students = StudentService(session)
     await students.create(ADMIN, "Аня", 160000)
@@ -211,7 +215,10 @@ async def test_провал_выгрузки_не_выдаётся_за_успе
 
     answers = [m.text or "" for m in harness.session.calls_of("AnswerCallbackQuery")]
     assert not any("Готово" in t for t in answers), "успех обещать нечем"
-    assert any("Не получилось" in t for t in answers), "о потере документа надо сказать"
+    sent = [m.text or "" for m in harness.session.calls_of("SendMessage")]
+    assert any("Не получилось отправить файл" in t for t in sent), (
+        "о потере документа надо сказать сообщением — «часиками» уже нечем"
+    )
 
 
 async def test_сбой_уборки_не_превращает_успех_в_ошибку(harness, sessionmaker, monkeypatch):
@@ -234,3 +241,93 @@ async def test_сбой_уборки_не_превращает_успех_в_о�
     texts = harness.session.sent_texts()
     assert any("Ученик добавлен" in t for t in texts)
     assert not any("Не получилось" in t for t in texts), "уборка не должна пугать пользователя"
+
+
+async def test_сорванная_подсказка_не_оставляет_невидимый_диалог(harness, session, sessionmaker):
+    """Состояние диалога коммитится, а подсказка о нём — обычная правка экрана.
+
+    Не доставилась правка — диалог оставался открытым и невидимым: человек
+    решал, что нажатие не прошло, а следующее же введённое им число (телефон,
+    цена из другого места) уходило в оплату этому ученику. Теперь содержимое
+    подсказки досылается отдельным сообщением тем же сливом.
+    """
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    harness.session.fail_on["EditMessageText"] = RuntimeError("сообщение слишком старое")
+    await harness.click(f"pay:{a.id}", user_id=ADMIN)
+    del harness.session.fail_on["EditMessageText"]
+
+    # Именно SendMessage: sent_texts() собирает текст и с правок, и с вызовов,
+    # которые упали, — по нему нельзя отличить «показали» от «пытались».
+    sent = [m.text or "" for m in harness.session.calls_of("SendMessage")]
+    assert any("Введите сумму оплаты" in t for t in sent), "открытый диалог обязан быть виден"
+
+
+async def test_сорванная_правка_не_выдаётся_за_ошибку_операции(harness, session, sessionmaker):
+    """Списание применено; сорванная правка карточки — не повод пугать.
+
+    Раньше провал правки поднимался наверх, и поверх успешного «Урок списан»
+    приходило «Не получилось выполнить действие. Попробуйте ещё раз» — прямое
+    приглашение списать урок второй раз.
+    """
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    harness.session.fail_on["EditMessageText"] = RuntimeError("сеть упала")
+    await harness.dp.feed_update(
+        harness.bot, make_update_callback(f"charge:{a.id}", user_id=ADMIN, update_id=8100)
+    )
+    del harness.session.fail_on["EditMessageText"]
+
+    assert await student_balances(sessionmaker) == [("Аня", -1)]
+    everything = harness.session.sent_texts() + [
+        m.text or "" for m in harness.session.calls_of("AnswerCallbackQuery")
+    ]
+    assert not any("Попробуйте ещё раз" in t for t in everything), "операция удалась, пугать нечем"
+
+
+async def test_списание_имеет_персистентное_подтверждение(harness, session, sessionmaker):
+    """Смерть процесса между коммитом и отправкой не должна оставлять урок
+    списанным без единого следа в чате: иначе преподаватель спишет второй раз.
+
+    Правку воспроизводить нельзя — она отбросит человека на покинутый экран, —
+    поэтому в очередь идёт её запасное сообщение.
+    """
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    harness.session.fail_on["EditMessageText"] = RuntimeError("сеть упала")
+    harness.session.fail_on["SendMessage"] = RuntimeError("сеть упала")
+    await harness.dp.feed_update(
+        harness.bot, make_update_callback(f"charge:{a.id}", user_id=ADMIN, update_id=8101)
+    )
+    del harness.session.fail_on["EditMessageText"], harness.session.fail_on["SendMessage"]
+
+    queued = await queued_messages(sessionmaker)
+    assert [row.method for row in queued] == ["SendMessage"], (
+        "подтверждение обязано ждать в очереди"
+    )
+
+    harness.session.clear()
+    await _make_due(sessionmaker)
+    assert await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock()) == 1
+    assert await student_balances(sessionmaker) == [("Аня", -1)], "дожимается ответ, а не операция"
+
+
+async def test_подсказка_диалога_не_попадает_в_очередь(harness, session, sessionmaker):
+    """Текст подсказки осмысленен только сейчас: доставленный через минуту, он
+    приходит в чат, где диалога уже нет."""
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    harness.session.fail_on["EditMessageText"] = RuntimeError("сеть упала")
+    harness.session.fail_on["SendMessage"] = RuntimeError("сеть упала")
+    await harness.click(f"price:{a.id}", user_id=ADMIN)
+    del harness.session.fail_on["EditMessageText"], harness.session.fail_on["SendMessage"]
+
+    assert await queued_messages(sessionmaker) == [], "подсказку повторять нельзя"

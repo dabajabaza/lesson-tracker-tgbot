@@ -59,12 +59,12 @@ async def on_payment_amount(
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        ui.answer(message, "Отправьте, пожалуйста, текстовое сообщение.", reply_markup=cancel_kb())
+        ui.reply(message, "Отправьте, пожалуйста, текстовое сообщение.", reply_markup=cancel_kb())
         return
     parsed = parse_money_strict(text)
     # parsed.value is None вне error-ветки не бывает, но типам это неизвестно.
     if parsed.error or parsed.value is None:
-        ui.answer(
+        ui.reply(
             message,
             money_error("amount", parsed.error or "format", "1600"),
             reply_markup=cancel_kb(),
@@ -83,7 +83,7 @@ async def on_payment_amount(
     ui.delete(message.chat.id, data.get("prompt_id"))
     if not res:
         text, kb = await menu(students, prefs, owner(message))
-        ui.answer(message, text, reply_markup=kb)
+        ui.reply(message, text, reply_markup=kb)
         return
     lines = [f"✅ Оплата {format_money(parsed.value)} внесена."]
     if res.prev_remainder > 0:
@@ -93,7 +93,7 @@ async def on_payment_amount(
         lines.append(
             f"Денежный остаток: {format_money(res.remainder)} — будет учтён при следующей оплате."
         )
-    ui.answer(
+    ui.confirm(
         message,
         "\n".join(lines) + "\n\n" + render_card(res.student),
         reply_markup=card_kb(res.student.id),
@@ -117,7 +117,9 @@ async def on_charge(
     if not s:
         ui.callback(cb, "Ученик не найден", show_alert=True)
         return
-    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id))
+    # durable: карточка здесь — единственное подтверждение списания/возврата,
+    # тост гаснет сам и в очередь не идёт.
+    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id), durable=True)
     ui.callback(
         cb,
         f"⚠️ Урок списан. Долг: {abs(s.balance)}"
@@ -143,5 +145,7 @@ async def on_refund(
     if not s:
         ui.callback(cb, "Ученик не найден", show_alert=True)
         return
-    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id))
+    # durable: карточка здесь — единственное подтверждение списания/возврата,
+    # тост гаснет сам и в очередь не идёт.
+    ui.edit(msg, *await card_view(students, cb.from_user.id, s.id), durable=True)
     ui.callback(cb, f"↩️ Урок возвращён. Осталось: {s.balance}")
