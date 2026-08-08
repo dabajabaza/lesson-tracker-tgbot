@@ -157,7 +157,7 @@ async def test_чужой_апдейт_не_открывает_ни_одной_�
     immediate: list[str] = []
 
     @event.listens_for(engine.sync_engine, "before_cursor_execute")
-    def _record(_conn, _cursor, statement, *_args):  # noqa: ANN202
+    def _record(_conn, _cursor, statement, *_args):
         if statement.startswith("BEGIN IMMEDIATE"):
             immediate.append(statement)
 

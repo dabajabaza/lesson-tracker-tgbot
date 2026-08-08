@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
+from .models import Operation, Student
 from .money import format_money
 
 # Часовой пояс отображения: Москва (UTC+3).
@@ -51,11 +52,11 @@ def format_date(ts: int | None) -> str:
     return datetime.fromtimestamp(ts, MSK).strftime("%d.%m.%Y")
 
 
-def list_button_label(s) -> str:
+def list_button_label(s: Student) -> str:
     return f"{status_emoji(s.balance)} {s.name} · {s.balance} зан. · {format_money(s.price)}"
 
 
-def render_card(s) -> str:
+def render_card(s: Student) -> str:
     """Карточка ученика (п.5 ТЗ)."""
     lines = [
         f"👤 {s.name}",
@@ -83,11 +84,12 @@ def render_card(s) -> str:
     return "\n".join(lines)
 
 
-def render_operation(op) -> str:
+def render_operation(op: Operation) -> str:
     """Строка истории (п.10 ТЗ)."""
     if op.type == "payment":
+        amount_text = format_money(op.amount) if op.amount is not None else "?"
         body = (
-            f"{OP_LABELS['payment']} {format_money(op.amount)}: "
+            f"{OP_LABELS['payment']} {amount_text}: "
             f"+{op.lessons_delta} {lessons_word(op.lessons_delta)}, "
             f"остаток {format_money(op.remainder_after)}"
         )
@@ -102,26 +104,30 @@ def render_operation(op) -> str:
         # навсегда. Неизвестную старую цену честно показываем как «?».
         old = op.snapshot_before.get("price")
         old_text = format_money(old) if old is not None else "?"
-        body = f"{OP_LABELS['price_change']}: {old_text} → {format_money(op.new_price)}"
+        new_text = format_money(op.new_price) if op.new_price is not None else "?"
+        body = f"{OP_LABELS['price_change']}: {old_text} → {new_text}"
     else:
         body = op.type
     line = f"{format_datetime(op.created_at)} — {body}"
     return f"❌ {line} (отменено)" if op.undone else line
 
 
-def describe_operation(op, student_name: str) -> str:
+def describe_operation(op: Operation, student_name: str) -> str:
     """Короткое описание для подтверждения отмены."""
+    # Nullable-поля гардятся так же, как в render_operation: аннотация
+    # Operation сразу подсветила, что format_money(None) достижим и здесь —
+    # оплата без суммы или смена цены без новой цены (живые данные из
+    # serverless, L1) роняли бы подтверждение отмены.
     if op.type == "payment":
-        what = (
-            f"оплату {format_money(op.amount)} "
-            f"(+{op.lessons_delta} {lessons_word(op.lessons_delta)})"
-        )
+        amount_text = format_money(op.amount) if op.amount is not None else "?"
+        what = f"оплату {amount_text} (+{op.lessons_delta} {lessons_word(op.lessons_delta)})"
     elif op.type == "charge":
         what = "списание урока"
     elif op.type == "refund":
         what = "возврат урока"
     elif op.type == "price_change":
-        what = f"изменение стоимости на {format_money(op.new_price)}"
+        price_text = format_money(op.new_price) if op.new_price is not None else "?"
+        what = f"изменение стоимости на {price_text}"
     else:
         what = op.type
     return f"{what} — {student_name}, {format_datetime(op.created_at)}"

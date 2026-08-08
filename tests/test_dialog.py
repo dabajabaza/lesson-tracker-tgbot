@@ -48,7 +48,7 @@ async def test_диалог_переживает_пересборку_диспе
 
     await harness.dp.emit_shutdown()
     for router in _SHARED_ROUTERS:
-        router._parent_router = None  # noqa: SLF001
+        router._parent_router = None
     harness.dp = build_dispatcher(container, TEST_ADMIN_IDS, harness.write_lock)
     await harness.dp.emit_startup()
 

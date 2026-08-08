@@ -20,7 +20,7 @@ def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession
     if db_url.startswith("sqlite"):
 
         @event.listens_for(engine.sync_engine, "connect")
-        def _sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+        def _sqlite_pragmas(dbapi_conn, _record):
             # WAL + busy_timeout: устойчивость к «database is locked» при
             # параллельных апдейтах.
             cur = dbapi_conn.cursor()
@@ -37,7 +37,7 @@ def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession
             dbapi_conn.isolation_level = None
 
         @event.listens_for(engine.sync_engine, "begin")
-        def _sqlite_begin(conn):  # noqa: ANN001
+        def _sqlite_begin(conn):
             # Раз драйвер больше не начинает транзакции сам, начинаем явно.
             #
             # IMMEDIATE, то есть забирая блокировку записи на входе. Обычный

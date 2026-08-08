@@ -12,3 +12,4 @@ venv/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+docs/code-review-*.md

@@ -13,7 +13,7 @@ from ..services import PaymentService, StudentService, ViewPrefService
 from ..states import Flow
 from ..ui import Responder
 from ..views import card_view
-from ._common import as_int, menu, message_of, money_error, owner, parts_of, target_of
+from ._common import as_int, menu, money_error, owner, target_of
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -27,12 +27,10 @@ async def on_pay(
     students: FromDishka[StudentService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    _cmd, a1, _a2 = parts_of(cb)
-    sid = as_int(a1)
-    if msg is None or sid is None:
-        ui.callback(cb, "Кнопка устарела", show_alert=True)
+    target = target_of(cb, ui)
+    if target is None:
         return
+    msg, sid = target
     s = await students.get(cb.from_user.id, sid)
     if not s:
         ui.callback(cb, "Ученик не найден", show_alert=True)
@@ -83,8 +81,11 @@ async def on_payment_amount(
     await state.clear()
     ui.delete(message.chat.id, data.get("prompt_id"))
     if not res:
-        text, kb = await menu(students, prefs, owner(message))
-        ui.reply(message, text, reply_markup=kb)
+        # НЕ `text`: эта переменная выше — проверенный ввод пользователя, и
+        # перепривязка молча подсовывала бы текст экрана любому будущему
+        # логу/аудиту суммы ниже по функции.
+        menu_text, kb = await menu(students, prefs, owner(message))
+        ui.reply(message, menu_text, reply_markup=kb)
         return
     lines = [f"✅ Оплата {format_money(parsed.value)} внесена."]
     if res.prev_remainder > 0:

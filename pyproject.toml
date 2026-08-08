@@ -45,7 +45,10 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+# RUF100 — мёртвые noqa: без него директивы на невключённые правила (ANN,
+# BLE, S…) выглядят как «правило включено и осознанно заглушено», хотя их
+# никто никогда не проверял.
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF100"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -53,7 +56,6 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"
-plugins = ["sqlalchemy.ext.mypy.plugin"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true

@@ -70,6 +70,35 @@ def target_of(cb: CallbackQuery, ui) -> tuple[Message, int] | None:
     return msg, sid
 
 
+def screen_of(cb: CallbackQuery, ui) -> Message | None:
+    """Сообщение под кнопкой без аргументов в callback_data — или None.
+
+    Тот же гард, что target_of, но для кнопок без id. Трёхстрочная копия жила
+    в одиннадцати обработчиках; менять поведение для недоступного сообщения
+    (скажем, отвечать «Сообщение слишком старое» вместо молчаливого гашения)
+    значило бы править одиннадцать мест и промахнуться в одном.
+    """
+    msg = message_of(cb)
+    if msg is None:
+        ui.callback(cb)
+        return None
+    return msg
+
+
+async def show_menu(cb: CallbackQuery, ui, students, prefs, toast: str | None = None) -> None:
+    """Перерисовать главное меню под кнопкой и погасить «часики».
+
+    Пять обработчиков (домой, отмена, обе пустые ветки отмены операции, отказ
+    от отмены) отличались только текстом тоста; шаг, добавленный в один из
+    них, молча не доезжал бы до остальных.
+    """
+    msg = screen_of(cb, ui)
+    if msg is None:
+        return
+    ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
+    ui.callback(cb, toast)
+
+
 def message_of(cb: CallbackQuery) -> Message | None:
     """Сообщение под кнопкой, если с ним ещё можно работать.
 

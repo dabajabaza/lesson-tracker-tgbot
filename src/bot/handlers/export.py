@@ -16,7 +16,7 @@ from ..export_data import (
 from ..keyboards import export_kb
 from ..services import HistoryService, StudentService
 from ..ui import Responder
-from ._common import message_of
+from ._common import screen_of
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -25,9 +25,8 @@ router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 @router.callback_query(F.data == "export")
 async def on_export_menu(cb: CallbackQuery, ui: FromDishka[Responder]) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     ui.edit(msg, "📤 Что экспортировать?", export_kb())
     ui.callback(cb)
@@ -40,17 +39,16 @@ async def on_export(
     history: FromDishka[HistoryService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     fmt = "csv" if cb.data == "exp_csv" else "xlsx"
     # «Часики» гасятся ПЕРВЫМИ, без текста: сборка и загрузка двух файлов на
     # большой истории занимает дольше, чем Telegram держит окно ответа на
     # нажатие, — тост после документов молча отклонялся, и кнопка крутилась,
-    # пока клиент не сдастся. А «Готово» здесь врать нечем: подтверждение —
-    # сами файлы, провал их отправки виден запасным сообщением (см.
-    # ui.document).
+    # пока клиент не сдастся. «Готово» обещать нечем: подтверждение — сами
+    # файлы, а о провале их отправки говорит запасное сообщение ui.document
+    # (наверх из слива ничего не поднимается — см. ui.flush).
     ui.callback(cb)
     await _send_export(ui, msg, students, history, cb.from_user.id, fmt)
 

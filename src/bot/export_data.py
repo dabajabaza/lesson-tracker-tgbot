@@ -6,6 +6,7 @@ Self-hosted, в отличие от serverless, умеет отправлять 
 from io import BytesIO
 
 from .csv_export import guard_formula
+from .models import Operation, Student
 from .money import to_rubles
 from .render import OP_LABELS, format_datetime
 
@@ -43,7 +44,7 @@ HISTORY_HEADERS = [
 # обработчике, но тем же самым способом.
 
 
-def snapshot_students(students) -> list[tuple]:
+def snapshot_students(students: list[Student]) -> list[tuple]:
     """Сырые атрибуты учеников — единственное, что читается в транзакции."""
     return [
         (
@@ -60,7 +61,7 @@ def snapshot_students(students) -> list[tuple]:
     ]
 
 
-def snapshot_operations(operations, names: dict[int, str]) -> list[tuple]:
+def snapshot_operations(operations: list[Operation], names: dict[int, str]) -> list[tuple]:
     return [
         (
             op.created_at,

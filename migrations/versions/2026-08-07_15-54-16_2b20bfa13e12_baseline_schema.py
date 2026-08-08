@@ -25,6 +25,7 @@ Create Date: 2026-08-07 15:54:16.596201
 
 """
 
+import logging
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -37,12 +38,17 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _create_missing(name: str, *args: object) -> bool:
-    """Создать таблицу, если её ещё нет. True — создали."""
+def _create_missing(name: str, *args: object) -> None:
+    """Создать таблицу, если её ещё нет — и сказать об этом в лог.
+
+    Лог не для красоты: при разборе инцидента с частичной схемой первым же
+    вопросом было «а что именно миграция создала на боевом файле» — и ответа
+    нигде не осталось.
+    """
     if sa.inspect(op.get_bind()).has_table(name):
-        return False
+        return
     op.create_table(name, *args)
-    return True
+    logging.getLogger("alembic.runtime.migration").info("Создана таблица %s", name)
 
 
 def upgrade() -> None:
