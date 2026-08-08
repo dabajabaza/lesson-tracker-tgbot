@@ -1,12 +1,13 @@
 """Оплаты, списания и возвраты занятий."""
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Student, now_ts
 from ._operations import record_operation
-from .students import StudentService
+from .students import MIN_PRICE, StudentService
 
 
 @dataclass
@@ -15,6 +16,9 @@ class PaymentResult:
     lessons: int
     remainder: int
     prev_remainder: int
+
+
+log = logging.getLogger(__name__)
 
 
 class PaymentService:
@@ -27,6 +31,13 @@ class PaymentService:
         целые занятия, новый остаток сохраняется."""
         s = await self._students.get(owner_id, sid)
         if not s:
+            return None
+        if s.price < MIN_PRICE:
+            # Страховка на случай строки, пришедшей мимо сервиса (наследие
+            # переноса из serverless, правка руками): без неё деление ниже
+            # роняет обработчик, и преподаватель видит «Не получилось выполнить
+            # действие» на каждой попытке оплаты этому ученику.
+            log.error("У ученика %s недопустимая стоимость занятия: %s", s.id, s.price)
             return None
         prev_remainder = s.remainder
         total = amount + s.remainder

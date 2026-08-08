@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import sys
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -59,6 +60,13 @@ _WATCHDOG_PROBE_TIMEOUT = 10
 # не поднят / временно лежать в момент старта — не падаем, а ждём с backoff.
 _CONNECT_RETRY_START = 3.0  # первая пауза (сек)
 _CONNECT_RETRY_MAX = 30.0  # потолок паузы (сек)
+# Сколько всего ждать связи, прежде чем сдаться. Бесконечный ретрай выглядел
+# безопаснее, но убирал последний сигнал о неустранимой поломке: при опечатке в
+# адресе прокси юнит навсегда оставался в activating, READY=1 не приходил,
+# WatchdogSec не взводился, Restart=always не срабатывал, а `systemctl restart`
+# в деплое висел без конца. С ограничением блип по-прежнему переживается, а
+# постоянная поломка доходит до systemd как failed — то есть до оператора.
+_CONNECT_BUDGET = 600.0  # сек
 # Пока ждём под systemd (Type=notify), продлеваем стартовый таймаут, чтобы
 # systemd не убил нас по TimeoutStartSec и не жёг лимит рестартов из-за блипа
 # прокси. Запас с потолком над (_CONNECT_RETRY_MAX + таймаут запроса).
@@ -75,6 +83,7 @@ async def _establish_connection(bot: Bot):
     """
     delay = _CONNECT_RETRY_START
     attempt = 0
+    deadline = time.monotonic() + _CONNECT_BUDGET
     while True:
         attempt += 1
         try:
@@ -86,6 +95,14 @@ async def _establish_connection(bot: Bot):
         except Exception as e:
             if isinstance(e, TelegramAPIError) and not isinstance(e, _RETRYABLE):
                 raise  # 401/битый токен/битые настройки — ретрай не спасёт
+            if time.monotonic() >= deadline:
+                logging.error(
+                    "Telegram недоступен %.0f с (%d попыток) — сдаюсь, чтобы поломку "
+                    "стало видно супервизору",
+                    _CONNECT_BUDGET,
+                    attempt,
+                )
+                raise
             # ProxyConnectionError, сеть, таймаут, DNS — ждём и пробуем снова.
             sd_notify(f"EXTEND_TIMEOUT_USEC={_START_EXTEND_USEC}")
             logging.warning(

@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from bot.config import load_config
 from bot.models import Base  # импорт модуля регистрирует все модели на Base.metadata
 
+# Значение-заглушка из alembic.ini: означает «URL не задан».
+_ALEMBIC_INI_PLACEHOLDER = "driver://user:pass@localhost/dbname"
+
 config = context.config
 target_metadata = Base.metadata
 
@@ -67,7 +70,12 @@ else:
         # сторожа просто исчезают из журнала. В тестах ветка не выполняется
         # (там передаётся готовое соединение), поэтому дефект жил незамеченным.
         fileConfig(config.config_file_name, disable_existing_loggers=False)
-    config.set_main_option("sqlalchemy.url", load_config().db_url)
+    # Только если вызывающий не задал URL сам. Безусловная перезапись делала
+    # аргумент `_run_migrations(db_url)` мёртвым и разворачивала любой ручной
+    # прогон alembic на боевую базу: оператор копировал файл, запускал
+    # `alembic downgrade -1` над копией — и ронял таблицы в проде.
+    if config.get_main_option("sqlalchemy.url") in (None, "", _ALEMBIC_INI_PLACEHOLDER):
+        config.set_main_option("sqlalchemy.url", load_config().db_url)
     if context.is_offline_mode():
         run_migrations_offline()
     else:

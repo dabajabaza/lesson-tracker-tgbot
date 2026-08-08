@@ -42,7 +42,17 @@ from .models import FsmRecord
 
 
 def _key(key: StorageKey) -> str:
-    return f"{key.bot_id}:{key.chat_id}:{key.user_id}:{key.thread_id}:{key.destiny}"
+    """Строковый ключ строки FSM — из ВСЕХ полей StorageKey.
+
+    business_connection_id включён не «на всякий случай»: без него ключ
+    перестаёт быть однозначным. Диалог в бизнес-чате и обычный диалог того же
+    человека схлопывались бы в одну строку, и «Введите сумму оплаты» из одного
+    затирало бы состояние другого — оплата ушла бы не тому ученику.
+    """
+    return (
+        f"{key.bot_id}:{key.chat_id}:{key.user_id}:"
+        f"{key.thread_id}:{key.business_connection_id}:{key.destiny}"
+    )
 
 
 class SqlAlchemyStorage(BaseStorage):
@@ -53,11 +63,12 @@ class SqlAlchemyStorage(BaseStorage):
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
         value = state.state if isinstance(state, State) else state
-        rec = await self._session.get(FsmRecord, _key(key))
+        row_key = _key(key)
+        rec = await self._session.get(FsmRecord, row_key)
         if rec is None:
             if value is None:
                 return
-            self._session.add(FsmRecord(key=_key(key), state=value, data={}))
+            self._session.add(FsmRecord(key=row_key, state=value, data={}))
         else:
             rec.state = value
 
@@ -66,9 +77,19 @@ class SqlAlchemyStorage(BaseStorage):
         return rec.state if rec else None
 
     async def set_data(self, key: StorageKey, data: Mapping[str, Any]) -> None:
-        rec = await self._session.get(FsmRecord, _key(key))
+        row_key = _key(key)
+        rec = await self._session.get(FsmRecord, row_key)
         if rec is None:
-            self._session.add(FsmRecord(key=_key(key), state=None, data=dict(data)))
+            # Как и в set_state: пустое значение при отсутствующей строке —
+            # ничего. Без этой ветки FSMContext.clear() (а это set_state(None)
+            # + set_data({})) вставлял пустую строку КАЖДОМУ, кто нажал любую
+            # кнопку: ClearStateOnCallbackMiddleware зовёт clear() на каждом
+            # нажатии. Навигация превращалась в запись — с блокировкой записи и
+            # кадром WAL, — а таблица копила по мусорной строке на человека,
+            # который ни одного диалога не открывал.
+            if not data:
+                return
+            self._session.add(FsmRecord(key=row_key, state=None, data=dict(data)))
         else:
             rec.data = dict(data)  # новый объект — SQLAlchemy заметит изменение JSON
 

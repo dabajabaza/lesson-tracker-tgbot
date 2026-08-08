@@ -7,17 +7,26 @@
 
 from aiogram.types import CallbackQuery, Message
 
+from ..models import fits_in_db
 from ..money import MAX_MONEY, format_money
 from ..services import StudentService, ViewPrefService
 from ..views import main_menu_view
 
 
 def as_int(value) -> int | None:
-    """Безопасный разбор аргумента callback_data (его может подделать клиент)."""
+    """Безопасный разбор аргумента callback_data (его может подделать клиент).
+
+    Проверяется и величина, а не только форма. Python-числа безразмерны, и
+    `card:99999999999999999999999` (23 цифры — легко влезает в лимит Telegram)
+    проходил разбор, доезжал до SQLite и падал там на привязке параметра:
+    вместо «Кнопка устарела» пользователь получал «Не получилось выполнить
+    действие» и трейсбек в журнале.
+    """
     try:
-        return int(value)
+        parsed = int(value)
     except (TypeError, ValueError):
         return None
+    return parsed if fits_in_db(parsed) else None
 
 
 def parts_of(cb: CallbackQuery) -> tuple[str, str | None, str | None]:
