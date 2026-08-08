@@ -13,6 +13,8 @@
 
 from unittest.mock import patch
 
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.methods import GetMe
 from sqlalchemy import select
 
 from bot import outbox
@@ -491,3 +493,58 @@ async def test_пустой_тик_поллера_не_трогает_блоки
         event.remove(engine.sync_engine, "before_cursor_execute", _record)
 
     assert immediate == [], "пустая проверка очереди не должна открывать запись"
+
+
+def _bad_request(text: str) -> TelegramBadRequest:
+    return TelegramBadRequest(method=GetMe(), message=text)
+
+
+async def test_not_modified_это_успех_а_не_повод_для_fallback(harness, session, sessionmaker):
+    """Типизированное исключение, а не RuntimeError: до сих пор все сбои в
+    тестах были голыми исключениями, и ветки on_error в _send не исполнялись
+    ни разу. «message is not modified» — повторный тап той же кнопки: экран
+    уже правильный, и слать запасное сообщение (дубль карточки в чат) или
+    держать durable-строку в очереди нельзя.
+    """
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    harness.session.fail_on["EditMessageText"] = _bad_request(
+        "Bad Request: message is not modified"
+    )
+    await harness.dp.feed_update(
+        harness.bot, make_update_callback(f"charge:{a.id}", user_id=ADMIN, update_id=8200)
+    )
+    del harness.session.fail_on["EditMessageText"]
+
+    assert await student_balances(sessionmaker) == [("Аня", -1)]
+    sent = [m.text or "" for m in harness.session.calls_of("SendMessage")]
+    assert sent == [], f"запасное сообщение не должно уходить на not modified: {sent}"
+    assert await queued_messages(sessionmaker) == [], (
+        "durable-правка при not modified считается доставленной"
+    )
+
+
+async def test_retry_after_переносит_попытку_на_срок_телеграма(harness, sessionmaker):
+    """429 несёт срок в себе: очередь обязана уважать retry_after, а не свой
+    экспоненциальный backoff."""
+    await harness.click("add", user_id=ADMIN)
+    await harness.send("Лера", user_id=ADMIN)
+    harness.session.fail_on["SendMessage"] = RuntimeError("сеть упала")
+    await harness.send("1600", user_id=ADMIN)
+    del harness.session.fail_on["SendMessage"]
+    await _make_due(sessionmaker)
+
+    harness.session.fail_on["SendMessage"] = TelegramRetryAfter(
+        method=GetMe(), message="Too Many Requests: retry after 42", retry_after=42
+    )
+    before = now_ts()
+    sent, carry = await outbox.deliver_batch(harness.bot, sessionmaker, harness.write_lock)
+    del harness.session.fail_on["SendMessage"]
+
+    assert sent == 0 and carry is None
+    (row,) = await queued_messages(sessionmaker)
+    assert before + 42 <= row.next_attempt_at <= now_ts() + 42, (
+        f"срок повторения обязан прийти из retry_after: {row.next_attempt_at - before}"
+    )

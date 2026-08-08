@@ -18,17 +18,21 @@ A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS (
 
 async def test_foreign_card_not_visible(harness, session, students):
     a = await students.create(A, "Аня", 160000)
-    await session.commit()  # repo не коммитит: подготовка фиксирует сама
+    await session.commit()  # сервисы не коммитят (L4): подготовка фиксирует сама
     await harness.click(f"card:{a.id}", user_id=B)
     assert "не найден" in last_edit(harness).lower()
 
 
-async def test_foreign_charge_rejected(harness, session, students):
+async def test_foreign_charge_rejected(harness, session, sessionmaker, students):
     a = await students.create(A, "Аня", 160000)
     await session.commit()
     await harness.click(f"charge:{a.id}", user_id=B)
     assert "не найден" in last_callback_answer(harness).lower()
-    fresh = await students.get(A, a.id)
+    # Свежей сессией, а не той же: identity map при expire_on_commit=False
+    # вернул бы закэшированный объект с balance=0 ДАЖЕ если бы чужое списание
+    # применилось — проверка изоляции арендаторов ничего бы не проверяла.
+    async with sessionmaker() as check:
+        fresh = await StudentService(check).get(A, a.id)
     assert fresh.balance == 0  # чужое списание не применилось
 
 
@@ -54,9 +58,9 @@ async def test_owner_charge_applies(harness, session, sessionmaker, students):
     a = await students.create(A, "Аня", 160000)
     await session.commit()
     await harness.click(f"charge:{a.id}", user_id=A)
-    # Обработчик коммитил в собственной сессии; читаем свежей, а не протухшим
-    # кэшем этой (expire_all в async-сессии кончается MissingGreenlet на
-    # ленивой перезагрузке).
+    # Обработчик закоммитил своей (запросной) сессией; читаем свежей, а не
+    # протухшим кэшем этой (expire_all в async-сессии кончается MissingGreenlet
+    # на ленивой перезагрузке).
     async with sessionmaker() as check:
         fresh = await StudentService(check).get(A, a.id)
     assert fresh.balance == -1

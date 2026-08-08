@@ -168,7 +168,11 @@ def test_база_с_частью_схемы_достраивается_а_не_
 
     apply_migrations(f"sqlite:///{db_path}")
 
-    tables = set(inspect(create_engine(f"sqlite:///{db_path}")).get_table_names())
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        tables = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
     missing = {"allowed_users", "invites", "fsm", "ui_prefs", "operations"} - tables
     assert not missing, f"миграция не создала: {sorted(missing)}"
 
