@@ -5,7 +5,7 @@ Self-hosted, в отличие от serverless, умеет отправлять 
 
 from io import BytesIO
 
-from .csv_export import to_csv_bytes
+from .csv_export import guard_formula, to_csv_bytes
 from .money import to_rubles
 from .render import OP_LABELS, format_datetime
 
@@ -78,7 +78,14 @@ def rows_to_csv(rows) -> bytes:
 
 
 def rows_to_xlsx(rows, sheet_title: str) -> bytes:
-    """Excel .xlsx через openpyxl. Импорт ленивый — модуль не нужен для CSV/тестов логики."""
+    """Excel .xlsx через openpyxl. Импорт ленивый — модуль не нужен для CSV/тестов логики.
+
+    Тот же экран от формул, что и в CSV. openpyxl отдаёт ячейку, начинающуюся
+    с «=», как настоящую формулу (data_type == "f"): ученик с именем
+    «=HYPERLINK(...)» превращал выгрузку преподавателя в исполняемый документ,
+    а кривое выражение — в предложение Excel «восстановить файл». Защита была
+    только на пути CSV, хотя источник данных общий.
+    """
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -86,7 +93,7 @@ def rows_to_xlsx(rows, sheet_title: str) -> bytes:
     assert ws is not None  # у свежего Workbook активный лист есть всегда
     ws.title = sheet_title
     for row in rows:
-        ws.append(list(row))
+        ws.append([guard_formula(cell) for cell in row])
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()

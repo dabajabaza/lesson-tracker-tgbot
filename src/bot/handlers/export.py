@@ -1,8 +1,10 @@
 """Выгрузка учеников и истории документами (п.17–18 ТЗ)."""
 
+from functools import partial
+
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message
 from dishka import FromDishka
 
 from ..export_data import history_rows, rows_to_csv, rows_to_xlsx, students_rows
@@ -62,15 +64,17 @@ async def _send_export(
     names = {s.id: s.name for s in rows}
     srows = students_rows(rows)
     hrows = history_rows(ops, names)
+    # Данные читаются здесь (внутри транзакции), а вот сборка файла отложена:
+    # partial отдаётся в Responder и выполняется при сливе, вне замка записи.
     if fmt == "csv":
         docs = [
-            (rows_to_csv(srows), "students.csv", "👥 Ученики"),
-            (rows_to_csv(hrows), "history.csv", "📜 История операций"),
+            (partial(rows_to_csv, srows), "students.csv", "👥 Ученики"),
+            (partial(rows_to_csv, hrows), "history.csv", "📜 История операций"),
         ]
     else:
         docs = [
-            (rows_to_xlsx(srows, "Ученики"), "students.xlsx", "👥 Ученики"),
-            (rows_to_xlsx(hrows, "История"), "history.xlsx", "📜 История операций"),
+            (partial(rows_to_xlsx, srows, "Ученики"), "students.xlsx", "👥 Ученики"),
+            (partial(rows_to_xlsx, hrows, "История"), "history.xlsx", "📜 История операций"),
         ]
-    for data, filename, caption in docs:
-        ui.document(msg, BufferedInputFile(data, filename), caption=caption)
+    for build, filename, caption in docs:
+        ui.document(msg, build, filename, caption=caption)

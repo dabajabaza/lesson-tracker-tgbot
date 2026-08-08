@@ -11,7 +11,7 @@ from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import FsmRecord, Student
-from bot.storage import ReadOnlyFsmView, SqlAlchemyStorage
+from bot.storage import ReadOnlyFsmView, SqlAlchemyStorage, _key
 from tests.reading import fsm_state, student_names
 
 KEY = StorageKey(bot_id=1, chat_id=42, user_id=42)
@@ -56,7 +56,9 @@ async def test_хранилище_и_сессия_запроса_делят_од
         storage = await scope.get(BaseStorage)
         assert isinstance(storage, SqlAlchemyStorage)
 
-        session.add(FsmRecord(key="1:42:42:None:default", state="Flow:probe", data={}))
+        # Ключ строим той же функцией, что и хранилище: литерал здесь однажды
+        # разошёлся с форматом и тест упал не по делу.
+        session.add(FsmRecord(key=_key(KEY), state="Flow:probe", data={}))
         assert await storage.get_state(KEY) == "Flow:probe"
 
 

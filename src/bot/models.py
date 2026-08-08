@@ -15,6 +15,18 @@ def now_ts() -> int:
     return int(time.time())
 
 
+# Границы 64-битного INTEGER в SQLite. Python-числа безразмерны, и всё, что не
+# влезает, драйвер отвергает уже на привязке параметра — OverflowError вместо
+# «ничего не найдено». Значения приходят снаружи (callback_data подделывается
+# клиентом, /allow набирается руками), поэтому проверять надо на входе.
+SQLITE_INT_MIN = -(2**63)
+SQLITE_INT_MAX = 2**63 - 1
+
+
+def fits_in_db(value: int) -> bool:
+    return SQLITE_INT_MIN <= value <= SQLITE_INT_MAX
+
+
 class Base(DeclarativeBase):
     pass
 

@@ -36,8 +36,20 @@ class AppProvider(Provider):
         return self._config
 
     @provide
-    def db(self, config: Config) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-        return create_db(config.db_url)
+    async def db(
+        self, config: Config
+    ) -> AsyncIterable[tuple[AsyncEngine, async_sessionmaker[AsyncSession]]]:
+        """Движок закрывается вместе с контейнером.
+
+        Генератор, а не обычный провайдер: финализатор dishka вызывает только у
+        генераторов. Пока его не было, `container.close()` возвращался с
+        открытым пулом — соединения aiosqlite и их рабочие потоки никто не
+        закрывал, WAL на выходе не чекпойнтился, а в тестах каждый закрытый
+        контейнер оставлял по потоку и по открытому дескриптору базы.
+        """
+        engine, sessionmaker = create_db(config.db_url)
+        yield engine, sessionmaker
+        await engine.dispose()
 
     @provide
     def engine(self, db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]]) -> AsyncEngine:

@@ -5,7 +5,7 @@ import io
 import re
 
 
-def _guard_formula(value) -> str:
+def guard_formula(value) -> str:
     """Защита от CSV formula injection: ведущие = + - @ Excel/Sheets исполняют
     как формулу. Обычные числа (−1, 1600,50) не трогаем."""
     s = "" if value is None else str(value)
@@ -20,7 +20,7 @@ def to_csv(rows: list[list]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";", lineterminator="\n")
     for row in rows:
-        writer.writerow([_guard_formula(c) for c in row])
+        writer.writerow([guard_formula(c) for c in row])
     return buf.getvalue().rstrip("\n")
 
 

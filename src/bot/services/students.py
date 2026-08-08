@@ -12,6 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import Student
 from ._operations import record_operation
 
+# Стоимость занятия строго положительна. Инвариант держался только в
+# обработчиках (parse_money_strict возвращает error="zero"), а делит на неё
+# PaymentService — и на строке с price=0 оплата падала бы ZeroDivisionError.
+# Боевая база приехала из serverless-версии (L1), так что унаследованная или
+# правленая руками строка — не выдумка.
+MIN_PRICE = 1
+
 
 class StudentService:
     def __init__(self, session: AsyncSession) -> None:
@@ -54,7 +61,7 @@ class StudentService:
         """Создаёт ученика; None, если имя пустое или у этого владельца занято
         (без учёта регистра)."""
         clean = (name or "").strip()
-        if not clean:
+        if not clean or price < MIN_PRICE:
             return None
         if await self.find_by_name(owner_id, clean):
             return None
@@ -77,7 +84,7 @@ class StudentService:
         """Изменение стоимости (п.12): только для будущих оплат, история не
         пересчитывается."""
         s = await self.get(owner_id, sid)
-        if not s:
+        if not s or new_price < MIN_PRICE:
             return None
         await record_operation(
             self._session,

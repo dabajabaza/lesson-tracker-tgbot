@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import access
-from .models import AllowedUser, Invite, now_ts
+from .models import AllowedUser, Invite, fits_in_db, now_ts
 from .ui import Responder
 
 log = logging.getLogger(__name__)
@@ -103,8 +103,11 @@ async def cmd_allow(
 
     args = (command.args or "").strip()
     # isdecimal, а не isdigit: последний истинен для символов вроде "³",
-    # на которых int() потом падает.
-    if not args.isdecimal():
+    # на которых int() потом падает. И сразу проверка величины: форма без
+    # величины пропускала 22-значный id в SQLite, где он падал на привязке
+    # параметра — админ получал «Не получилось выполнить действие» вместо
+    # подсказки по использованию.
+    if not args.isdecimal() or not fits_in_db(int(args)):
         ui.reply(message, _ALLOW_USAGE, parse_mode="HTML")
         return
 

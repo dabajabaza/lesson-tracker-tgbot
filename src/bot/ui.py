@@ -13,7 +13,9 @@
 подсказки обязано случиться раньше отправки следующей, иначе экран мигает.
 """
 
+import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,7 +30,7 @@ from aiogram.methods import (
     SendMessage,
     TelegramMethod,
 )
-from aiogram.types import CallbackQuery, InputFile, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import OutboxMessage, now_ts
@@ -64,8 +66,18 @@ OnError = Literal["raise", "not_modified", "quiet"]
 
 
 @dataclass(slots=True)
+class _LazyDocument:
+    """Ещё не собранный документ: содержимое появится при отправке."""
+
+    chat_id: int
+    build: Callable[[], bytes]
+    filename: str
+    caption: str | None
+
+
+@dataclass(slots=True)
 class _Pending:
-    method: TelegramMethod[Any]
+    method: TelegramMethod[Any] | _LazyDocument
     on_error: OnError = "raise"
     # Ключ FSM, которому после отправки нужно запомнить message_id ответа как
     # prompt_id. Единственное место, где id известен только после сети.
@@ -210,10 +222,25 @@ class Responder:
         )
 
     def document(
-        self, message: Message, document: InputFile, *, caption: str | None = None
+        self,
+        message: Message,
+        build: Callable[[], bytes],
+        filename: str,
+        *,
+        caption: str | None = None,
     ) -> None:
-        """Файл выгрузки. В очередь не идёт: это мегабайты, которым нечего
-        делать в базе, а повторить выгрузку пользователь может сам.
+        """Файл выгрузки. Собирается ЛЕНИВО, при сливе.
+
+        build зовётся не здесь, а во время отправки, и в отдельном потоке.
+        Раньше .xlsx собирался прямо в обработчике — то есть внутри общего
+        замка записи и открытой транзакции: пара тысяч операций означала
+        секунды, на которые вставали все остальные апдейты, фоновый отправщик и
+        проба сторожа, да ещё и с занятым циклом событий. Именно от такого
+        удержания замка уходил весь разворот «обработчик → коммит → отправка»,
+        и держать в нём CPU-работу — то же самое, только без сети.
+
+        В очередь не идёт: это мегабайты, которым нечего делать в базе, а
+        повторить выгрузку пользователь может сам.
 
         Зато о провале он узнаёт — запасным сообщением. Раньше сбой поднимался
         наверх, но до человека не доходил: ответ на нажатие кнопки к тому
@@ -223,7 +250,9 @@ class Responder:
         """
         self._queue.append(
             _Pending(
-                SendDocument(chat_id=message.chat.id, document=document, caption=caption),
+                _LazyDocument(
+                    chat_id=message.chat.id, build=build, filename=filename, caption=caption
+                ),
                 fallback=self._message(
                     message.chat.id,
                     "⚠️ Не получилось отправить файл. Попробуйте выгрузить ещё раз.",
@@ -355,8 +384,19 @@ class Responder:
 
     @staticmethod
     async def _send(bot: Bot, item: _Pending) -> Any:
+        method = item.method
+        if isinstance(method, _LazyDocument):
+            # to_thread: сборка книги openpyxl — чистый CPU, и в цикле событий
+            # ей делать нечего. Замка здесь уже нет, но соседние апдейты всё
+            # равно ждали бы своей очереди на исполнение.
+            data = await asyncio.to_thread(method.build)
+            method = SendDocument(
+                chat_id=method.chat_id,
+                document=BufferedInputFile(data, method.filename),
+                caption=method.caption,
+            )
         try:
-            return await bot(item.method)
+            return await bot(method)
         except TelegramBadRequest as exc:
             if item.on_error == "not_modified" and "not modified" in str(exc).lower():
                 return None
