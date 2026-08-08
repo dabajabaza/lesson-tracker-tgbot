@@ -50,6 +50,10 @@ _LOCK_NAME = "lesson-tracker-selfhosted.lock"
 # при дефолтах (60+30) мёртвое соединение обнаруживалось лишь через ~90с. Ужимаем
 # до ~35с — этого хватает для честного long-poll (сервер отвечает за ≤POLLING),
 # а битый сокет отваливается быстро, и aiogram переподключается сам.
+# ВНИМАНИЕ: это per-request default aiogram для ВСЕХ вызовов Bot API, а не
+# только поллинга (getUpdates добавляет polling_timeout сверху сам). SendMessage
+# в 15 с укладывается с запасом, а вот загрузка документов — нет: у неё свой
+# бюджет, см. ui._UPLOAD_TIMEOUT.
 _SESSION_TIMEOUT = 15  # буфер поверх polling (сек)
 _POLLING_TIMEOUT = 20  # длительность long-poll (сек) → detect ≤ 35с
 # systemd watchdog: проба доступности Telegram и её темп. WatchdogSec в юните

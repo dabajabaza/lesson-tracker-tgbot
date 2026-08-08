@@ -171,3 +171,72 @@ def test_база_с_частью_схемы_достраивается_а_не_
     tables = set(inspect(create_engine(f"sqlite:///{db_path}")).get_table_names())
     missing = {"allowed_users", "invites", "fsm", "ui_prefs", "operations"} - tables
     assert not missing, f"миграция не создала: {sorted(missing)}"
+
+
+def test_fsm_ключи_старого_формата_переезжают_на_новый(tmp_path):
+    """Формат ключа FSM сменился (шестое поле business_connection_id), и без
+    переписывания строк все незавершённые диалоги терялись при деплое: код
+    искал 6-частный ключ, строки лежали под 5-частным, raw_state читался как
+    None — преподаватель посреди «Введите сумму оплаты» получал главное меню
+    вместо записанной оплаты. Нарушение L3 в его основном сценарии.
+    """
+    db_path = tmp_path / "fsm.db"
+    # База на ревизии ДО смены формата: пишем строку старым ключом.
+    apply_migrations(f"sqlite:///{db_path}", revision="5b3c10d2ced8")
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO fsm (key, state, data) VALUES (?, ?, ?)",
+            ("1:42:42:None:default", "Flow:payment_amount", '{"student_id": 7}'),
+        )
+
+    apply_migrations(f"sqlite:///{db_path}")  # догоняем голову
+
+    with sqlite3.connect(db_path) as con:
+        rows = con.execute("SELECT key, state FROM fsm").fetchall()
+    assert rows == [("1:42:42:None:None:default", "Flow:payment_amount")], (
+        f"ключ обязан получить шестое поле, а не потеряться: {rows}"
+    )
+
+
+def test_outbox_с_чужой_схемой_пересоздаётся_а_не_штампуется(tmp_path):
+    """Гард по одному has_table штамповал ревизию поверх остатка с ДРУГИМИ
+    колонками: каждый INSERT в outbox падал бы на «no column named attempts»,
+    то есть каждая денежная операция откатывалась целиком, и upgrade head уже
+    ничего не чинил — ревизия числится применённой."""
+    db_path = tmp_path / "outbox.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "CREATE TABLE outbox (id INTEGER PRIMARY KEY, method TEXT, "
+            "payload TEXT, created_at BIGINT)"  # без attempts/next_attempt_at
+        )
+
+    apply_migrations(f"sqlite:///{db_path}")
+
+    with sqlite3.connect(db_path) as con:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(outbox)").fetchall()}
+        con.execute(
+            "INSERT INTO outbox (method, payload, created_at, attempts, next_attempt_at) "
+            "VALUES ('SendMessage', '{}', 1, 0, 1)"
+        )
+        indexes = {r[1] for r in con.execute("PRAGMA index_list(outbox)").fetchall()}
+    assert {"attempts", "next_attempt_at"} <= cols, f"колонки не достроены: {sorted(cols)}"
+    assert "ix_outbox_next_attempt" in indexes
+
+
+def test_полный_остаток_outbox_сохраняет_строки(tmp_path):
+    """Совместимый остаток (откаченная попытка той же схемы) трогать нельзя:
+    недоставленные строки в нём — обещания, их дожмёт отправщик."""
+    db_path = tmp_path / "outbox-full.db"
+    apply_migrations(f"sqlite:///{db_path}", revision="5b3c10d2ced8")
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO outbox (method, payload, created_at, attempts, next_attempt_at) "
+            'VALUES (\'SendMessage\', \'{"chat_id": 1, "text": "x"}\', 1, 0, 1)'
+        )
+        con.execute("DELETE FROM alembic_version")
+
+    apply_migrations(f"sqlite:///{db_path}")  # заново с нуля по существующей схеме
+
+    with sqlite3.connect(db_path) as con:
+        count = con.execute("SELECT count(*) FROM outbox").fetchone()[0]
+    assert count == 1, "совместимый остаток должен пережить повторный прогон"
