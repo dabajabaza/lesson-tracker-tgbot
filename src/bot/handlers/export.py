@@ -7,7 +7,8 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message
 from dishka import FromDishka
 
-from ..export_data import history_rows, rows_to_csv, rows_to_xlsx, students_rows
+from ..csv_export import to_csv_bytes
+from ..export_data import history_rows, rows_to_xlsx, students_rows
 from ..keyboards import export_kb
 from ..services import HistoryService, StudentService
 from ..ui import Responder
@@ -68,8 +69,8 @@ async def _send_export(
     # partial отдаётся в Responder и выполняется при сливе, вне замка записи.
     if fmt == "csv":
         docs = [
-            (partial(rows_to_csv, srows), "students.csv", "👥 Ученики"),
-            (partial(rows_to_csv, hrows), "history.csv", "📜 История операций"),
+            (partial(to_csv_bytes, srows), "students.csv", "👥 Ученики"),
+            (partial(to_csv_bytes, hrows), "history.csv", "📜 История операций"),
         ]
     else:
         docs = [

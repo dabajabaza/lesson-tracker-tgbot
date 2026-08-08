@@ -14,8 +14,8 @@ dependencies = [
     "aiohttp-socks>=0.8",
     "aiosqlite>=0.20",
     "alembic>=1.13",
-    # импортируется лениво внутри экспорта в .xlsx — grep по шапкам файлов его не видит
     "dishka>=1.10.1",
+    # импортируется лениво внутри экспорта в .xlsx — grep по шапкам файлов его не видит
     "openpyxl>=3.1",
     "sqlalchemy[asyncio]>=2.0,<3",
 ]

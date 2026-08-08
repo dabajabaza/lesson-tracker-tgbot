@@ -1,9 +1,13 @@
-"""Тесты бизнес-логики и чистых функций на настоящем SQLite (in-memory).
-Фикстуры session/sessionmaker/engine — в conftest.py."""
+"""Тесты бизнес-логики и чистых функций.
+
+База настоящая, но не in-memory: каждому тесту достаётся личная файловая копия
+схемы, собранной настоящими миграциями (см. L8 и conftest.py). Файл здесь не
+случайность — на нём держатся и копирование шаблона, и пробы вторым
+соединением; переезд на :memory: тихо сломал бы и то, и другое."""
 
 from bot.csv_export import to_csv
 from bot.export_data import history_rows, students_rows
-from bot.money import MAX_MONEY, format_money, parse_money, parse_money_strict, to_rubles
+from bot.money import MAX_MONEY, format_money, parse_money_strict, to_rubles
 from bot.render import lessons_word, render_operation, status_emoji
 
 A, B = 111, 222  # owner id двух разных пользователей
@@ -17,17 +21,17 @@ def test_money_format_and_parse():
     assert format_money(160050) == "1 600,50 ₽"
     assert format_money(-160000) == "-1 600 ₽"
     assert to_rubles(160050) == "1600,50"
-    assert parse_money("1 600,50") == 160050
-    assert parse_money("1600.5") == 160050
-    assert parse_money("abc") is None
-    assert parse_money("12,345") is None
+    assert parse_money_strict("1 600,50").value == 160050
+    assert parse_money_strict("1600.5").value == 160050
+    assert parse_money_strict("abc").error == "format"
+    assert parse_money_strict("12,345").error == "format"
 
 
 def test_money_limits():
     assert parse_money_strict("0").error == "zero"
     assert parse_money_strict("1" * 30).error == "range"
-    assert parse_money("10000001") is None  # > 10 млн ₽
-    assert parse_money("10000000") == MAX_MONEY  # ровно лимит проходит
+    assert parse_money_strict("10000001").error == "range"  # > 10 млн ₽
+    assert parse_money_strict("10000000").value == MAX_MONEY  # ровно лимит проходит
 
 
 def test_status_and_plural():

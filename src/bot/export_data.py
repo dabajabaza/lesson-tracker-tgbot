@@ -5,7 +5,7 @@ Self-hosted, в отличие от serverless, умеет отправлять 
 
 from io import BytesIO
 
-from .csv_export import guard_formula, to_csv_bytes
+from .csv_export import guard_formula
 from .money import to_rubles
 from .render import OP_LABELS, format_datetime
 
@@ -71,10 +71,6 @@ def history_rows(operations, names: dict[int, str]) -> list[list]:
             ]
         )
     return rows
-
-
-def rows_to_csv(rows) -> bytes:
-    return to_csv_bytes(rows)
 
 
 def rows_to_xlsx(rows, sheet_title: str) -> bytes:

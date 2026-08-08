@@ -28,11 +28,6 @@ def parse_money_strict(raw) -> MoneyParse:
     return MoneyParse(value=value)
 
 
-def parse_money(raw) -> int | None:
-    """Упрощённый вариант: копейки или None."""
-    return parse_money_strict(raw).value
-
-
 def format_money(kopecks: int) -> str:
     """160000 → «1 600 ₽», 160050 → «1 600,50 ₽» (разделитель тысяч — пробел)."""
     sign = "-" if kopecks < 0 else ""
