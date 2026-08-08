@@ -11,6 +11,7 @@ Telegram подтверждает апдейт только следующим �
 не увидели — здесь всё идёт через настоящий диспетчер.
 """
 
+import time
 from unittest.mock import patch
 
 from bot import access
@@ -142,3 +143,39 @@ async def test_допущенный_позже_обрабатывается_но
     await harness.dp.feed_update(harness.bot, update)
     assert harness.session.calls, "допущенный обязан получить ответ"
     assert 4002 in await processed_update_ids(sessionmaker), "теперь отметка нужна"
+
+
+async def test_повтор_не_блокирует_уборку(harness, sessionmaker, monkeypatch):
+    """Отброшенный повтор обязан закрыть за собой транзакцию.
+
+    SELECT на проверку отметки уже открывает транзакцию, и она у нас
+    IMMEDIATE — то есть держит блокировку записи. Ранний выход без отката
+    оставлял её открытой, а `_settle` тут же брал общий замок и лез за той же
+    блокировкой вторым соединением: бот вставал на все 5 секунд busy_timeout и
+    падал с «database is locked». Попадали в это ровно на восстановлении после
+    рестарта, ради которого идемпотентность и заведена: процесс умер, не успев
+    подтвердить offset, Telegram прислал апдейт заново.
+
+    Проверяется по времени, а не по результату: уборка в итоге проходит и с
+    дефектом — просто после того, как истечёт busy_timeout. Наблюдаемая беда
+    здесь именно простой, поэтому порог (2 с) взят заметно ниже busy_timeout
+    (5 с) и на два порядка выше нормального прогона (~10 мс).
+    """
+    import bot.middlewares as mw
+
+    async with sessionmaker() as s:
+        s.add(ProcessedUpdate(update_id=1, created_at=1))  # 1970 год
+        await s.commit()
+
+    update = make_update_message("привет", user_id=ADMIN, update_id=7777)
+    await harness.dp.feed_update(harness.bot, update)
+
+    monkeypatch.setattr(mw, "_PRUNE_EVERY", 0)  # уборка назрела
+    started = time.monotonic()
+    await harness.dp.feed_update(harness.bot, update)  # тот же update_id — повтор
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2, f"повтор заблокировал бота на {elapsed:.1f} с"
+    assert 1 not in await processed_update_ids(sessionmaker), (
+        "уборка после отброшенного повтора должна была отработать"
+    )

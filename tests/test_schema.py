@@ -5,6 +5,8 @@
 как уже случившийся однажды.
 """
 
+import sqlite3
+
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config as AlembicConfig
@@ -142,3 +144,30 @@ def test_миграция_переживает_остаток_от_откаче�
 
     assert [r[0] for r in marks] == [42], "прежние отметки терять незачем"
     assert revision[0][0] != BASELINE_REVISION, "ревизия обязана догнать голову"
+
+
+def test_база_с_частью_схемы_достраивается_а_не_штампуется(tmp_path):
+    """База, где есть часть таблиц, обязана получить недостающие.
+
+    Гард baseline-миграции спрашивал только про `students` и при её наличии
+    выходил целиком — то есть считал, что раз есть одна таблица, есть и
+    остальные шесть. База с частью схемы штамповалась на head с навсегда
+    отсутствующими `allowed_users` и `invites`, и `upgrade head` починить её
+    уже не мог: ревизия числится применённой. Каждый апдейт после этого умирал
+    в AccessMiddleware на «no such table: allowed_users» — бот превращался в
+    кирпич. Ровно в этом состоянии оказалась dev-база репозитория.
+    """
+    db_path = tmp_path / "partial.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "CREATE TABLE students (id INTEGER PRIMARY KEY, owner_id BIGINT, name TEXT, "
+            "name_lower TEXT, price BIGINT, balance INTEGER, remainder BIGINT, "
+            "last_payment_at BIGINT, last_payment_amount BIGINT, "
+            "last_payment_lessons INTEGER, created_at BIGINT)"
+        )
+
+    apply_migrations(f"sqlite:///{db_path}")
+
+    tables = set(inspect(create_engine(f"sqlite:///{db_path}")).get_table_names())
+    missing = {"allowed_users", "invites", "fsm", "ui_prefs", "operations"} - tables
+    assert not missing, f"миграция не создала: {sorted(missing)}"

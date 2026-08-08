@@ -3,12 +3,21 @@
 Базовая миграция: повторяет схему, которая до сих пор создавалась через
 Base.metadata.create_all. Существующие данные не трогает.
 
-Ключевая деталь — проверка инспектором в начале upgrade(). Боевая база уже
-содержит все эти таблицы (10 учеников, 109 операций), но записи в
-alembic_version у неё нет. Без проверки первый же запуск попытался бы создать
-существующие таблицы и упал бы прямо на выкатке. С ней база «штампуется» сама:
-alembic отметит ревизию применённой, ничего не изменив. На пустой базе (тесты,
-новая установка) миграция работает как обычно и создаёт схему.
+Ключевая деталь — проверка инспектором перед КАЖДОЙ таблицей. Боевая база уже
+содержит эти таблицы (10 учеников, 109 операций), но записи в alembic_version у
+неё нет. Без проверки первый же запуск попытался бы создать существующие
+таблицы и упал бы прямо на выкатке. С ней база «штампуется» сама: alembic
+отметит ревизию применённой, ничего не изменив. На пустой базе (тесты, новая
+установка) миграция работает как обычно и создаёт схему.
+
+Проверка именно по каждой таблице, а не одна на всю ревизию. Прежняя версия
+спрашивала про `students` и при её наличии выходила целиком — то есть считала,
+что раз есть одна таблица, есть и остальные шесть. База с ЧАСТЬЮ схемы
+штамповалась на head с навсегда отсутствующими таблицами, и починить её
+`upgrade head` уже не мог: ревизия числится применённой. Это не гипотеза —
+ровно в таком состоянии оказалась dev-база репозитория: `students` и
+`operations` на месте, `allowed_users` и `invites` нет, и каждый апдейт умирал
+в AccessMiddleware на «no such table: allowed_users».
 
 Revision ID: 2b20bfa13e12
 Revises:
@@ -28,14 +37,17 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _create_missing(name: str, *args: object) -> bool:
+    """Создать таблицу, если её ещё нет. True — создали."""
+    if sa.inspect(op.get_bind()).has_table(name):
+        return False
+    op.create_table(name, *args)
+    return True
+
+
 def upgrade() -> None:
     """Upgrade schema."""
-    if sa.inspect(op.get_bind()).has_table("students"):
-        # Схема уже на месте — это существующая боевая база. Только отмечаем
-        # ревизию применённой (это делает сам alembic после выхода отсюда).
-        return
-
-    op.create_table(
+    _create_missing(
         "allowed_users",
         sa.Column("user_id", sa.BigInteger(), nullable=False),
         sa.Column("username", sa.String(), nullable=True),
@@ -43,14 +55,14 @@ def upgrade() -> None:
         sa.Column("invited_by", sa.BigInteger(), nullable=True),
         sa.PrimaryKeyConstraint("user_id"),
     )
-    op.create_table(
+    _create_missing(
         "fsm",
         sa.Column("key", sa.String(), nullable=False),
         sa.Column("state", sa.String(), nullable=True),
         sa.Column("data", sa.JSON(), nullable=False),
         sa.PrimaryKeyConstraint("key"),
     )
-    op.create_table(
+    _create_missing(
         "invites",
         sa.Column("code", sa.String(), nullable=False),
         sa.Column("created_by", sa.BigInteger(), nullable=False),
@@ -60,7 +72,7 @@ def upgrade() -> None:
         sa.Column("used_at", sa.BigInteger(), nullable=True),
         sa.PrimaryKeyConstraint("code"),
     )
-    op.create_table(
+    _create_missing(
         "operations",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("owner_id", sa.BigInteger(), nullable=False),
@@ -76,11 +88,17 @@ def upgrade() -> None:
         sa.Column("created_at", sa.BigInteger(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
+    # Индексы тоже поимённо: таблица могла существовать без них.
+    existing = {ix["name"] for ix in sa.inspect(op.get_bind()).get_indexes("operations")}
     with op.batch_alter_table("operations", schema=None) as batch_op:
-        batch_op.create_index("idx_operations_owner_undone", ["owner_id", "undone"], unique=False)
-        batch_op.create_index("idx_operations_student", ["student_id"], unique=False)
+        if "idx_operations_owner_undone" not in existing:
+            batch_op.create_index(
+                "idx_operations_owner_undone", ["owner_id", "undone"], unique=False
+            )
+        if "idx_operations_student" not in existing:
+            batch_op.create_index("idx_operations_student", ["student_id"], unique=False)
 
-    op.create_table(
+    _create_missing(
         "students",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("owner_id", sa.BigInteger(), nullable=False),
@@ -96,7 +114,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("owner_id", "name_lower", name="uq_students_owner_name"),
     )
-    op.create_table(
+    _create_missing(
         "ui_prefs",
         sa.Column("owner_id", sa.BigInteger(), nullable=False),
         sa.Column("sort", sa.String(), nullable=False),

@@ -48,8 +48,8 @@ jobs:
 
       - name: Линтеры и типы
         run: |
-          uv run ruff check src tests migrations migrate_from_serverless.py
-          uv run ruff format --check src tests migrations migrate_from_serverless.py
+          uv run ruff check src tests migrations
+          uv run ruff format --check src tests migrations
           uv run mypy src
 
       # На сервере uv нет: там зависимости ставятся pip'ом из requirements.txt,
