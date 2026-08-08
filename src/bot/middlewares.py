@@ -32,6 +32,7 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import BaseStorage
+from aiogram.methods import DeleteMessage
 from aiogram.types import Message, TelegramObject, Update
 from dishka import AsyncContainer
 from sqlalchemy import delete, select
@@ -178,17 +179,19 @@ class DbSessionMiddleware(BaseMiddleware):
             raise
         return result
 
-    async def _settle(self, container: AsyncContainer, ui: Responder) -> None:
+    async def _settle(self, container: AsyncContainer, ui: Responder, bot) -> None:
         """Закрыть хвосты, которые известны только после отправки.
 
         Второй короткой транзакцией — двумя миллисекундными вместо одной на
         весь круг до Telegram, ровно тот размен, ради которого затевался
-        разворот порядка. Здесь три дела:
+        разворот порядка. Здесь четыре дела:
 
         * удалить строки outbox, чьи сообщения ушли (оставшиеся дожмёт
           outbox.py);
         * дописать id отправленных подсказок в состояние FSM — message_id
           существует только после отправки;
+        * убрать из чата подсказки, чей диалог за время отправки уже
+          завершился;
         * закрыть диалоги, чью подсказку не удалось показать вовсе.
 
         Обслуживания здесь больше нет: уборка обеих таблиц-очередей живёт у
@@ -198,27 +201,31 @@ class DbSessionMiddleware(BaseMiddleware):
         и том же.
 
         Потеря этой транзакции (смерть процесса в узком окне после отправки)
-        безобидна в обе стороны: неудалённую строку outbox отправщик пошлёт
-        повторно — дубль ответа не страшен, — а невыясненный prompt_id стоит
-        одной неубранной подсказки в чате.
+        безобидна: неудалённую строку outbox отправщик пошлёт повторно — дубль
+        ответа не страшен, — а невыясненный prompt_id стоит одной неубранной
+        подсказки в чате.
         """
         delivered = ui.delivered()
         if not delivered and not ui.prompt_updates and not ui.failed_prompts:
             return
+        orphaned: list[tuple[int, int]] = []  # (chat_id, message_id)
         factory = await container.get(async_sessionmaker[AsyncSession])
         async with self._lock, factory() as session:
             if delivered:
                 await session.execute(delete(OutboxMessage).where(OutboxMessage.id.in_(delivered)))
             storage = SqlAlchemyStorage(session)
             for key, message_id in ui.prompt_updates:
-                # Гард от гонки: эта запись идёт ПОСЛЕ круга сети, и быстрый
-                # следующий апдейт мог уже завершить диалог. Дописать prompt_id
-                # в закрытый диалог значило бы воскресить пустую строку мусором
-                # {"prompt_id": …}. Пропускаем; цена — одна неубранная
-                # подсказка, тот же бюджет, что у потери самой транзакции
-                # (см. L5).
+                # Гонка: эта запись идёт ПОСЛЕ круга сети, и быстрый следующий
+                # апдейт мог завершить диалог раньше. Тогда подсказка, которую
+                # мы только что отправили, уже никому не нужна — и удалить её
+                # некому: следующий шаг читал prompt_id ДО нашей записи, то
+                # есть указывающий на прошлую (уже удалённую) подсказку.
+                # Раньше мы просто пропускали запись, и свежая подсказка
+                # оставалась висеть в чате навсегда. Теперь убираем её сами —
+                # id у нас на руках, а состояние говорит, что диалог закрыт.
                 ctx = FSMContext(storage=storage, key=key)
                 if await ctx.get_state() is None:
+                    orphaned.append((key.chat_id, message_id))
                     continue
                 await ctx.update_data(prompt_id=message_id)
             for key in ui.failed_prompts:
@@ -238,6 +245,20 @@ class DbSessionMiddleware(BaseMiddleware):
         ui.prompt_updates.clear()
         ui.failed_prompts.clear()
 
+        # Сеть — уже вне замка и вне транзакции, как и всё остальное здесь.
+        # Удаление косметическое: не прошло — в чате останется лишняя строка,
+        # ронять из-за неё апдейт незачем.
+        for chat_id, message_id in orphaned:
+            try:
+                await bot(DeleteMessage(chat_id=chat_id, message_id=message_id))
+            except Exception:
+                log.warning(
+                    "Не удалось убрать осиротевшую подсказку %s в чате %s",
+                    message_id,
+                    chat_id,
+                    exc_info=True,
+                )
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
@@ -255,9 +276,12 @@ class DbSessionMiddleware(BaseMiddleware):
 
         # Сеть — уже вне замка и вне транзакции. Пока эти вызовы идут, база
         # свободна и следующий апдейт обрабатывается, а не ждёт.
-        # finally: слив может подняться наверх (потерянный документ — см.
-        # ui.flush), но отправленное всё равно обязано быть отмечено, иначе
-        # фоновый отправщик пошлёт его второй раз.
+        #
+        # Из flush наверх не поднимается ничего: у каждого сбоя есть либо
+        # запасное сообщение, либо очередь (см. ui.flush). finally тут не
+        # поэтому, а на будущее — отправленное обязано быть отмечено, даже
+        # если слив когда-нибудь снова научится бросать, иначе фоновый
+        # отправщик пошлёт его второй раз.
         try:
             await ui.flush(data["bot"])
         finally:
@@ -269,7 +293,7 @@ class DbSessionMiddleware(BaseMiddleware):
             # outbox отправщик пошлёт повторно, а невыясненный prompt_id стоит
             # одной неубранной подсказки.
             try:
-                await self._settle(container, ui)
+                await self._settle(container, ui, data["bot"])
             except Exception:
                 log.exception("Не удалось закрыть хвосты апдейта — операция при этом применена")
         return result

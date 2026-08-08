@@ -10,7 +10,7 @@ from ..render import describe_operation
 from ..services import HistoryService, StudentService, ViewPrefService
 from ..ui import Responder
 from ..views import card_view, history_view
-from ._common import as_int, menu, message_of, parts_of, screen_of, show_menu
+from ._common import as_int, paged_target_of, parts_of, screen_of, show_menu
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -24,13 +24,11 @@ async def on_history(
     history: FromDishka[HistoryService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    _cmd, a1, a2 = parts_of(cb)
-    sid = as_int(a1)
-    if msg is None or sid is None:
-        ui.callback(cb, "Кнопка устарела", show_alert=True)
+    target = paged_target_of(cb, ui)
+    if target is None:
         return
-    ui.edit(msg, *await history_view(students, history, cb.from_user.id, sid, as_int(a2) or 0))
+    msg, sid, page = target
+    ui.edit(msg, *await history_view(students, history, cb.from_user.id, sid, page))
     ui.callback(cb)
 
 
@@ -71,13 +69,14 @@ async def on_undo_yes(
     _cmd, a1, _a2 = parts_of(cb)
     res = await history.undo_last(cb.from_user.id, as_int(a1))
     if res.status == "empty":
-        ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
-        ui.callback(cb, "Отменять нечего", show_alert=True)
+        await show_menu(cb, ui, students, prefs, "Отменять нечего", show_alert=True)
         return
     if res.status == "stale":
-        ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
-        ui.callback(
+        await show_menu(
             cb,
+            ui,
+            students,
+            prefs,
             "⚠️ Появились новые операции — отмена не выполнена. "
             "Откройте «Отменить действие» ещё раз.",
             show_alert=True,

@@ -58,9 +58,9 @@ async def test_owner_charge_applies(harness, session, sessionmaker, students):
     a = await students.create(A, "Аня", 160000)
     await session.commit()
     await harness.click(f"charge:{a.id}", user_id=A)
-    # Обработчик закоммитил своей (запросной) сессией; читаем свежей, а не
-    # протухшим кэшем этой (expire_all в async-сессии кончается MissingGreenlet
-    # на ленивой перезагрузке).
+    # Коммит сделал DbSessionMiddleware — обработчики и сервисы не коммитят
+    # вовсе (L4). Читаем свежей сессией, а не протухшим кэшем этой (expire_all
+    # в async-сессии кончается MissingGreenlet на ленивой перезагрузке).
     async with sessionmaker() as check:
         fresh = await StudentService(check).get(A, a.id)
     assert fresh.balance == -1
