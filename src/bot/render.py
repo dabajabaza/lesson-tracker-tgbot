@@ -68,11 +68,16 @@ def render_card(s) -> str:
         lines.append(f"⚠️ Долг: {abs(s.balance)} {lessons_word(s.balance)}")
     lines.append("")
     if s.last_payment_at:
-        lines += [
-            f"📅 Последняя оплата: {format_date(s.last_payment_at)}",
-            f"   Сумма: {format_money(s.last_payment_amount)}",
-            f"   Добавлено занятий: {s.last_payment_lessons}",
-        ]
+        # Каждое поле гардится отдельно, как в export_data.students_rows: база
+        # пришла живой из serverless-версии (L1), и строка с датой оплаты, но
+        # NULL-суммой — не гипотеза. format_money(None) ронял карточку, а с
+        # ней каждый тап card:, «К карточке» и подтверждение любой операции по
+        # этому ученику — навсегда, без пути починить из бота.
+        lines.append(f"📅 Последняя оплата: {format_date(s.last_payment_at)}")
+        if s.last_payment_amount is not None:
+            lines.append(f"   Сумма: {format_money(s.last_payment_amount)}")
+        if s.last_payment_lessons is not None:
+            lines.append(f"   Добавлено занятий: {s.last_payment_lessons}")
     else:
         lines.append("📅 Оплат ещё не было")
     return "\n".join(lines)
@@ -91,8 +96,13 @@ def render_operation(op) -> str:
     elif op.type == "refund":
         body = f"{OP_LABELS['refund']}: +1 занятие (осталось {op.balance_after})"
     elif op.type == "price_change":
+        # .get не случайно — ключа может не быть (snapshot_before это
+        # нетипизированный JSON, унаследованный из serverless), но результат
+        # раньше шёл прямо в format_money и ронял всю «Историю» этого ученика
+        # навсегда. Неизвестную старую цену честно показываем как «?».
         old = op.snapshot_before.get("price")
-        body = f"{OP_LABELS['price_change']}: {format_money(old)} → {format_money(op.new_price)}"
+        old_text = format_money(old) if old is not None else "?"
+        body = f"{OP_LABELS['price_change']}: {old_text} → {format_money(op.new_price)}"
     else:
         body = op.type
     line = f"{format_datetime(op.created_at)} — {body}"
