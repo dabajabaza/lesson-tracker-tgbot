@@ -21,7 +21,7 @@ from bot import outbox
 from bot.models import FsmRecord, OutboxMessage, now_ts
 from bot.services import StudentService
 from tests.bot_harness import make_update_callback
-from tests.reading import fsm_state, queued_messages, student_balances
+from tests.reading import fsm_state, queued_messages, student_balances, student_prices
 
 ADMIN = 1
 
@@ -547,4 +547,49 @@ async def test_retry_after_переносит_попытку_на_срок_те�
     (row,) = await queued_messages(sessionmaker)
     assert before + 42 <= row.next_attempt_at <= now_ts() + 42, (
         f"срок повторения обязан прийти из retry_after: {row.next_attempt_at - before}"
+    )
+
+
+async def test_подсказка_не_остаётся_висеть_при_быстром_следующем_шаге(harness, sessionmaker):
+    """Гонка `_settle` с быстрым следующим сообщением — с проверкой ЦЕЛЕЙ
+    удаления, а не только состояния FSM.
+
+    prompt_id пишется после круга сети. Сообщение, пришедшее в это окно,
+    читает состояние ДО записи — то есть не знает id только что отправленной
+    подсказки. Раньше это кончалось так: следующий шаг удалял «ничего» (старый
+    указатель вёл на уже удалённое сообщение), диалог завершался, а свежая
+    подсказка «Теперь введите стоимость» оставалась в чате навсегда.
+
+    Теперь `_settle`, обнаружив закрытый диалог, убирает подсказку сам — id у
+    него на руках.
+    """
+    import bot.middlewares as mw
+
+    await harness.click("add", user_id=ADMIN)
+
+    original = mw.DbSessionMiddleware._settle
+    held: list = []
+
+    async def hold(self, container, ui, bot):
+        held.append((self, container, ui, bot))
+
+    mw.DbSessionMiddleware._settle = hold  # type: ignore[method-assign]
+    try:
+        await harness.send("Лера", user_id=ADMIN)  # ставит Flow.new_price + подсказку
+    finally:
+        mw.DbSessionMiddleware._settle = original  # type: ignore[method-assign]
+
+    prompt_ids = harness.session.sent_message_ids("Теперь введите стоимость")
+    assert prompt_ids, "подсказка о стоимости обязана уйти"
+
+    await harness.send("1600", user_id=ADMIN)  # успевает раньше _settle: диалог закрыт
+    assert await student_prices(sessionmaker) == [("Лера", 160000)]
+
+    harness.session.clear()
+    for args in held:  # опоздавший хвост доезжает
+        await original(*args)
+
+    deleted = [m.message_id for m in harness.session.calls_of("DeleteMessage")]
+    assert deleted == prompt_ids, (
+        f"осиротевшую подсказку {prompt_ids} надо убрать из чата, удалено: {deleted}"
     )

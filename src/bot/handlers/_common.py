@@ -70,6 +70,22 @@ def target_of(cb: CallbackQuery, ui) -> tuple[Message, int] | None:
     return msg, sid
 
 
+def paged_target_of(cb: CallbackQuery, ui) -> tuple[Message, int, int] | None:
+    """То же, что target_of, плюс номер страницы из третьего сегмента.
+
+    Через target_of, а не своей копией разбора: единственный обработчик,
+    которому нужен второй аргумент callback_data, оставался ручной копией
+    гарда — то есть местом, мимо которого прошло бы любое будущее ужесточение
+    проверки подделанных данных.
+    """
+    target = target_of(cb, ui)
+    if target is None:
+        return None
+    msg, sid = target
+    _cmd, _a1, a2 = parts_of(cb)
+    return msg, sid, as_int(a2) or 0
+
+
 def screen_of(cb: CallbackQuery, ui) -> Message | None:
     """Сообщение под кнопкой без аргументов в callback_data — или None.
 
@@ -85,18 +101,28 @@ def screen_of(cb: CallbackQuery, ui) -> Message | None:
     return msg
 
 
-async def show_menu(cb: CallbackQuery, ui, students, prefs, toast: str | None = None) -> None:
+async def show_menu(
+    cb: CallbackQuery,
+    ui,
+    students,
+    prefs,
+    toast: str | None = None,
+    *,
+    show_alert: bool = False,
+) -> None:
     """Перерисовать главное меню под кнопкой и погасить «часики».
 
     Пять обработчиков (домой, отмена, обе пустые ветки отмены операции, отказ
     от отмены) отличались только текстом тоста; шаг, добавленный в один из
-    них, молча не доезжал бы до остальных.
+    них, молча не доезжал бы до остальных. show_alert нужен именно веткам
+    отмены: там тост объясняет, почему действие не выполнено, и всплывающим
+    окном его труднее пропустить.
     """
     msg = screen_of(cb, ui)
     if msg is None:
         return
     ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
-    ui.callback(cb, toast)
+    ui.callback(cb, toast, show_alert=show_alert)
 
 
 def message_of(cb: CallbackQuery) -> Message | None:
