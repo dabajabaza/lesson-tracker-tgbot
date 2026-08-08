@@ -73,3 +73,73 @@ async def test_нулевая_стоимость_не_роняет_оплату(
     broken = (await session.scalars(select(Student).where(Student.name == "Боря"))).one()
 
     assert await PaymentService(session, students).apply(ADMIN, broken.id, 1000) is None
+
+
+async def test_гигантский_поисковый_запрос_не_пробивает_лимит_telegram(harness, session):
+    """Запрос — пользовательский текст до 4096 символов. Эхо без обрезки
+    давало сообщение длиннее лимита: API отвечал 400, ответ молча терялся, и
+    бот выглядел мёртвым — подсказка удалена, состояние очищено, в чате пусто.
+    """
+    await StudentService(session).create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    await harness.click("search", user_id=ADMIN)
+    await harness.send("х" * 4096, user_id=ADMIN)
+
+    sent = [m.text or "" for m in harness.session.calls_of("SendMessage")]
+    result = [t for t in sent if "🔍" in t]
+    assert result, "ответ на поиск обязан уйти"
+    assert all(len(t) <= 4096 for t in result), f"эхо пробило лимит: {max(map(len, result))}"
+
+
+def test_карточка_переживает_null_поля_последней_оплаты():
+    """База пришла живой из serverless (L1): строка с датой оплаты, но
+    NULL-суммой — не гипотеза. format_money(None) ронял карточку навсегда."""
+    from bot.render import render_card
+
+    class S:
+        name = "Аня"
+        balance = 3
+        price = 160000
+        remainder = 0
+        last_payment_at = 1_700_000_000
+        last_payment_amount = None
+        last_payment_lessons = None
+
+    card = render_card(S())
+    assert "Последняя оплата" in card
+    assert "None" not in card
+
+
+def test_история_переживает_снимок_без_цены():
+    """snapshot_before — нетипизированный JSON из serverless; отсутствие ключа
+    price роняло всю «Историю» ученика навсегда."""
+    from bot.render import render_operation
+
+    class Op:
+        type = "price_change"
+        lessons_delta = 0
+        balance_after = 0
+        remainder_after = 0
+        amount = None
+        new_price = 180000
+        created_at = 1_700_000_000
+        undone = False
+        snapshot_before: dict = {}
+
+    line = render_operation(Op())
+    assert "?" in line and "1 800 ₽" in line
+
+
+def test_числовые_ячейки_xlsx_остаются_числами():
+    """guard_formula строковал всё подряд: =SUM() по выгрузке возвращал 0,
+    сортировка по «Осталось занятий» ставила 10 перед 4, а Excel зеленил
+    таблицу флагом «число как текст». Число формулой не станет — его не
+    трогаем; формульные строки по-прежнему экранируются."""
+    data = rows_to_xlsx([[7, "Аня", 10], ["=1+1", "ок", -3]], "Лист")
+    ws = openpyxl.load_workbook(io.BytesIO(data)).active
+
+    assert ws.cell(row=1, column=1).data_type == "n", "int обязан остаться числом"
+    assert ws.cell(row=1, column=3).data_type == "n"
+    assert ws.cell(row=2, column=3).data_type == "n", "отрицательное число — тоже число"
+    assert ws.cell(row=2, column=1).data_type == "s", "формула обязана остаться текстом"

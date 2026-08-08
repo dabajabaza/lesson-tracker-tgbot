@@ -65,6 +65,18 @@ async def history_view(
     return f"📜 История: {s.name}\n\n{body}", history_kb(sid, page, total_pages)
 
 
+# Сколько символов запроса показывать в эхо. Не форматирование: запрос — это
+# пользовательский текст до 4096 символов, и без обрезки эхо пробивало лимит
+# длины сообщения Telegram. API отвечал 400 «message is too long», ответ молча
+# терялся (у reply нет запасного варианта), и бот выглядел мёртвым: подсказка
+# уже удалена, состояние очищено, в чате — ничего.
+_QUERY_ECHO_LIMIT = 60
+
+
+def _query_echo(query: str) -> str:
+    return query if len(query) <= _QUERY_ECHO_LIMIT else query[: _QUERY_ECHO_LIMIT - 1] + "…"
+
+
 def search_results_view(found, query) -> tuple[str, InlineKeyboardMarkup]:
     shown = found[:MAX_SEARCH_RESULTS]
     rows = [
@@ -73,12 +85,12 @@ def search_results_view(found, query) -> tuple[str, InlineKeyboardMarkup]:
     ]
     rows.append([InlineKeyboardButton(text="⬅️ К списку", callback_data="home")])
     if not found:
-        text = f"🔍 По запросу «{query}» никого не нашлось."
+        text = f"🔍 По запросу «{_query_echo(query)}» никого не нашлось."
     elif len(found) > MAX_SEARCH_RESULTS:
         text = (
-            f"🔍 Найдено по «{query}»: {len(found)}, показаны первые "
+            f"🔍 Найдено по «{_query_echo(query)}»: {len(found)}, показаны первые "
             f"{MAX_SEARCH_RESULTS}. Уточните запрос."
         )
     else:
-        text = f"🔍 Найдено по «{query}»: {len(found)}"
+        text = f"🔍 Найдено по «{_query_echo(query)}»: {len(found)}"
     return text, InlineKeyboardMarkup(inline_keyboard=rows)

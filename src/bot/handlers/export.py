@@ -1,14 +1,18 @@
 """Выгрузка учеников и истории документами (п.17–18 ТЗ)."""
 
-from functools import partial
-
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message
 from dishka import FromDishka
 
 from ..csv_export import to_csv_bytes
-from ..export_data import history_rows, rows_to_xlsx, students_rows
+from ..export_data import (
+    history_rows,
+    rows_to_xlsx,
+    snapshot_operations,
+    snapshot_students,
+    students_rows,
+)
 from ..keyboards import export_kb
 from ..services import HistoryService, StudentService
 from ..ui import Responder
@@ -41,11 +45,14 @@ async def on_export(
         ui.callback(cb)
         return
     fmt = "csv" if cb.data == "exp_csv" else "xlsx"
-    await _send_export(ui, msg, students, history, cb.from_user.id, fmt)
-    # Без «Готово»: тост уходил раньше, чем файлы, и врал при неудачной
-    # выгрузке — человек видел успех, а документа не получал. Подтверждение
-    # здесь — сами файлы; провал их отправки поднимется наверх (см. ui.flush).
+    # «Часики» гасятся ПЕРВЫМИ, без текста: сборка и загрузка двух файлов на
+    # большой истории занимает дольше, чем Telegram держит окно ответа на
+    # нажатие, — тост после документов молча отклонялся, и кнопка крутилась,
+    # пока клиент не сдастся. А «Готово» здесь врать нечем: подтверждение —
+    # сами файлы, провал их отправки виден запасным сообщением (см.
+    # ui.document).
     ui.callback(cb)
+    await _send_export(ui, msg, students, history, cb.from_user.id, fmt)
 
 
 async def _send_export(
@@ -63,19 +70,28 @@ async def _send_export(
         ui.reply(msg, "Экспортировать нечего — данных пока нет.")
         return
     names = {s.id: s.name for s in rows}
-    srows = students_rows(rows)
-    hrows = history_rows(ops, names)
-    # Данные читаются здесь (внутри транзакции), а вот сборка файла отложена:
-    # partial отдаётся в Responder и выполняется при сливе, вне замка записи.
+    # В транзакции — только снимок сырых атрибутов. Форматирование тысяч ячеек
+    # и сборка файла уезжают в отложенный вызов (Responder исполнит его в
+    # отдельном потоке, после коммита): под замком CPU-работе не место.
+    s_snap = snapshot_students(rows)
+    h_snap = snapshot_operations(ops, names)
     if fmt == "csv":
         docs = [
-            (partial(to_csv_bytes, srows), "students.csv", "👥 Ученики"),
-            (partial(to_csv_bytes, hrows), "history.csv", "📜 История операций"),
+            (lambda: to_csv_bytes(students_rows(s_snap)), "students.csv", "👥 Ученики"),
+            (lambda: to_csv_bytes(history_rows(h_snap)), "history.csv", "📜 История операций"),
         ]
     else:
         docs = [
-            (partial(rows_to_xlsx, srows, "Ученики"), "students.xlsx", "👥 Ученики"),
-            (partial(rows_to_xlsx, hrows, "История"), "history.xlsx", "📜 История операций"),
+            (
+                lambda: rows_to_xlsx(students_rows(s_snap), "Ученики"),
+                "students.xlsx",
+                "👥 Ученики",
+            ),
+            (
+                lambda: rows_to_xlsx(history_rows(h_snap), "История"),
+                "history.xlsx",
+                "📜 История операций",
+            ),
         ]
     for build, filename, caption in docs:
         ui.document(msg, build, filename, caption=caption)

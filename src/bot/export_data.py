@@ -33,41 +33,97 @@ HISTORY_HEADERS = [
 ]
 
 
-def students_rows(students) -> list[list]:
+# Снимки против форматирования: обработчик работает внутри транзакции и под
+# общим замком записи, поэтому там разрешено только ДЁШЕВОЕ — прочитать
+# атрибуты ORM-объектов в кортежи. Форматирование каждой ячейки (to_rubles,
+# format_datetime — это тысячи вызовов на большой истории) живёт в
+# *_rows и выполняется уже при сборке файла: в отложенном вызове, в отдельном
+# потоке, после коммита. Иначе «Экспорт» снова останавливал бы все чужие
+# апдейты, фоновый отправщик и пробу сторожа — короче, чем при сборке xlsx в
+# обработчике, но тем же самым способом.
+
+
+def snapshot_students(students) -> list[tuple]:
+    """Сырые атрибуты учеников — единственное, что читается в транзакции."""
+    return [
+        (
+            s.id,
+            s.name,
+            s.price,
+            s.balance,
+            s.remainder,
+            s.last_payment_at,
+            s.last_payment_amount,
+            s.last_payment_lessons,
+        )
+        for s in students
+    ]
+
+
+def snapshot_operations(operations, names: dict[int, str]) -> list[tuple]:
+    return [
+        (
+            op.created_at,
+            op.student_id,
+            names.get(op.student_id) or op.snapshot_before.get("name", ""),
+            op.type,
+            op.amount,
+            op.lessons_delta,
+            op.balance_after,
+            op.remainder_after,
+            op.new_price,
+            op.undone,
+        )
+        for op in operations
+    ]
+
+
+def students_rows(snapshot: list[tuple]) -> list[list]:
     # Аннотация обязательна: без неё тип выводится из строки заголовков как
     # list[list[str]], и числовые ячейки ниже перестают проходить проверку.
     rows: list[list[object]] = [list(STUDENT_HEADERS)]
-    for s in students:
+    for sid, name, price, balance, remainder, paid_at, paid_amount, paid_lessons in snapshot:
         rows.append(
             [
-                s.id,
-                s.name,
-                to_rubles(s.price),
-                s.balance,
-                to_rubles(s.remainder),
-                format_datetime(s.last_payment_at) if s.last_payment_at else "",
-                to_rubles(s.last_payment_amount) if s.last_payment_amount is not None else "",
-                s.last_payment_lessons if s.last_payment_lessons is not None else "",
+                sid,
+                name,
+                to_rubles(price),
+                balance,
+                to_rubles(remainder),
+                format_datetime(paid_at) if paid_at else "",
+                to_rubles(paid_amount) if paid_amount is not None else "",
+                paid_lessons if paid_lessons is not None else "",
             ]
         )
     return rows
 
 
-def history_rows(operations, names: dict[int, str]) -> list[list]:
+def history_rows(snapshot: list[tuple]) -> list[list]:
     rows: list[list[object]] = [list(HISTORY_HEADERS)]
-    for op in operations:
+    for (
+        created_at,
+        sid,
+        name,
+        op_type,
+        amount,
+        delta,
+        balance,
+        remainder,
+        price,
+        undone,
+    ) in snapshot:
         rows.append(
             [
-                format_datetime(op.created_at),
-                op.student_id,
-                names.get(op.student_id) or op.snapshot_before.get("name", ""),
-                OP_LABELS.get(op.type, op.type),
-                to_rubles(op.amount) if op.amount is not None else "",
-                op.lessons_delta or 0,
-                op.balance_after,
-                to_rubles(op.remainder_after),
-                to_rubles(op.new_price) if op.new_price is not None else "",
-                "да" if op.undone else "",
+                format_datetime(created_at),
+                sid,
+                name,
+                OP_LABELS.get(op_type, op_type),
+                to_rubles(amount) if amount is not None else "",
+                delta or 0,
+                balance,
+                to_rubles(remainder),
+                to_rubles(price) if price is not None else "",
+                "да" if undone else "",
             ]
         )
     return rows

@@ -6,7 +6,12 @@
 соединением; переезд на :memory: тихо сломал бы и то, и другое."""
 
 from bot.csv_export import to_csv
-from bot.export_data import history_rows, students_rows
+from bot.export_data import (
+    history_rows,
+    snapshot_operations,
+    snapshot_students,
+    students_rows,
+)
 from bot.money import MAX_MONEY, format_money, parse_money_strict, to_rubles
 from bot.render import lessons_word, render_operation, status_emoji
 
@@ -158,11 +163,11 @@ async def test_export_rows(session, students, payments, history):
     await session.commit()
     await payments.apply(A, s.id, 650000)
     await session.commit()
-    students = await students.list_all(A, "name")
+    rows = await students.list_all(A, "name")
     ops = await history.all_operations(A)
-    scsv = to_csv(students_rows(students))
+    scsv = to_csv(students_rows(snapshot_students(rows)))
     assert "Аня;1600,00;4" in scsv
-    hcsv = to_csv(history_rows(ops, {s.id: s.name}))
+    hcsv = to_csv(history_rows(snapshot_operations(ops, {s.id: s.name})))
     assert "Оплата;6500,00;4" in hcsv
 
 

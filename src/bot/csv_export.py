@@ -5,10 +5,20 @@ import io
 import re
 
 
-def guard_formula(value) -> str:
-    """Защита от CSV formula injection: ведущие = + - @ Excel/Sheets исполняют
-    как формулу. Обычные числа (−1, 1600,50) не трогаем."""
-    s = "" if value is None else str(value)
+def guard_formula(value) -> str | int | float:
+    """Защита от formula injection: ведущие = + - @ Excel/Sheets исполняют
+    как формулу.
+
+    Числа возвращаются КАК ЕСТЬ, а не строкой: int сам по себе формулой не
+    станет, а строкование ломало .xlsx — каждая числовая ячейка приезжала
+    текстом, =SUM() по колонке возвращал 0, сортировка по «Осталось занятий»
+    ставила 10 перед 4, и Excel зеленил всю таблицу флагом «число как текст».
+    """
+    if value is None:
+        return ""
+    if isinstance(value, int | float):
+        return value
+    s = str(value)
     if re.match(r"^[=+@-]", s) and not re.fullmatch(r"-?\d+(,\d+)?", s):
         s = "'" + s
     return s
