@@ -28,7 +28,12 @@ from .admin import router as admin_router
 from .config import ROOT, Config, load_config
 from .di import build_container
 from .handlers import router
-from .middlewares import AccessMiddleware, DbSessionMiddleware, FsmSessionMiddleware
+from .middlewares import (
+    AccessGateMiddleware,
+    AccessMiddleware,
+    DbSessionMiddleware,
+    FsmSessionMiddleware,
+)
 from .outbox import run_sender
 from .storage import ReadOnlyFsmView
 from .watchdog import run_watchdog, sd_notify
@@ -200,12 +205,15 @@ def build_dispatcher(
     """
     # Хранилище диспетчера — только чтение (raw_state для фильтров): встроенный
     # FSMContextMiddleware aiogram читает его ДО открытия области запроса.
-    dp = Dispatcher(storage=ReadOnlyFsmView(container))
+    dp = Dispatcher(storage=ReadOnlyFsmView())
     # admin_ids кладём в workflow-данные — aiogram отдаст их обработчикам,
     # объявившим одноимённый параметр.
     dp["admin_ids"] = admin_ids
 
     dp.update.outer_middleware(ContainerMiddleware(container))
+    # Гейт доступа — ДО единицы работы: чужой апдейт не должен стоить ни
+    # замка, ни транзакции записи. См. AccessGateMiddleware.
+    dp.update.middleware(AccessGateMiddleware(admin_ids))
     # Один замок записи на процесс, и это инвариант L4, а не деталь: тот же
     # объект берёт фоновый отправщик очереди. Передаётся параметром, а не
     # добирается вызывающим из dp[...] по строковому ключу: опечатка в ключе

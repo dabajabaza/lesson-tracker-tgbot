@@ -66,9 +66,9 @@ async def test_хранилище_диспетчера_отказывается_
     """Инвариант «пишет только область запроса» — свойство кода: если будущая
     версия aiogram начнёт писать через хранилище диспетчера, это громко упадёт
     здесь, а не всплывёт как «database is locked» в проде."""
-    view = ReadOnlyFsmView(container)
+    view = ReadOnlyFsmView()
 
-    assert await view.get_state(KEY) is None  # чтение — можно
+    assert await view.get_state(KEY) is None  # чтение — заглушка, всегда пусто
 
     with pytest.raises(RuntimeError, match="мимо области запроса"):
         await view.set_state(KEY, "Flow:new_price")
