@@ -62,22 +62,30 @@ def db_path(migrated_template: Path, tmp_path: Path) -> Path:
 
 
 @pytest_asyncio.fixture
-async def engine(db_path: Path) -> AsyncIterator[AsyncEngine]:
-    """Движок собирается тем же create_db, что и в проде.
+async def _db(db_path: Path) -> AsyncIterator[tuple[AsyncEngine, async_sessionmaker[AsyncSession]]]:
+    """Движок И фабрика сессий — оба из create_db, как в проде.
 
     Не create_async_engine напрямую: в create_db живут PRAGMA и — важнее —
     отключение собственного управления транзакциями у драйвера SQLite, без
-    которого SAVEPOINT не откатывается. Собери тесты своим движком — и они
-    будут проверять не ту семантику транзакций, которая работает в бою.
+    которого SAVEPOINT не откатывается. И фабрика тоже оттуда, а не собранная
+    руками копия: пересоборка «по образцу» повторяет только те kwargs, о
+    которых вспомнили, — добавь create_db какую-нибудь session-настройку, и
+    тесты молча остались бы на старой семантике. Собери тесты своим движком —
+    и они будут проверять не ту семантику транзакций, которая работает в бою.
     """
-    eng, _sm = create_db(f"sqlite+aiosqlite:///{db_path}")
-    yield eng
+    eng, sm = create_db(f"sqlite+aiosqlite:///{db_path}")
+    yield eng, sm
     await eng.dispose()
 
 
 @pytest_asyncio.fixture
-async def sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(engine, expire_on_commit=False)
+async def engine(_db) -> AsyncEngine:
+    return _db[0]
+
+
+@pytest_asyncio.fixture
+async def sessionmaker(_db) -> async_sessionmaker[AsyncSession]:
+    return _db[1]
 
 
 @pytest_asyncio.fixture
@@ -144,9 +152,15 @@ async def harness(container: AsyncContainer) -> AsyncIterator[BotHarness]:
     write_lock = asyncio.Lock()
     dp = build_dispatcher(container, TEST_ADMIN_IDS, write_lock)
     await dp.emit_startup()
+    harness = BotHarness(bot=bot, dp=dp, session=session, write_lock=write_lock)
     try:
-        yield BotHarness(bot=bot, dp=dp, session=session, write_lock=write_lock)
+        yield harness
     finally:
-        await dp.emit_shutdown()
+        # Именно harness.dp, а не замкнутая локальная dp: тест пересборки
+        # диспетчера подменяет harness.dp, и завершать надо ЖИВОЙ экземпляр —
+        # старый тест уже погасил сам. Иначе старый гасился дважды, а новый
+        # (с его shutdown-хуками, включая aiogram'овский fsm.close) не гасился
+        # вовсе.
+        await harness.dp.emit_shutdown()
         for router in _SHARED_ROUTERS:
             router._parent_router = None  # noqa: SLF001
