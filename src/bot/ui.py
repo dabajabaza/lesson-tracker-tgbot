@@ -46,6 +46,12 @@ _FAILED = object()
 # фоновый отправщик. С запасом больше круга до Telegram и тика поллера.
 OUTBOX_GRACE = 60
 
+# Бюджет загрузки документа. Секундный default сессии (__main__._SESSION_TIMEOUT
+# = 15) — это per-request лимит ВСЕХ вызовов Bot API, ужатый ради быстрого
+# обнаружения мёртвого long-poll. Мегабайтный .xlsx через прокси в него не
+# влезает: выгрузка падала бы TimeoutError на каждой попытке, навсегда.
+_UPLOAD_TIMEOUT = 120
+
 
 def _dump(method: TelegramMethod[Any]) -> str:
     """Метод aiogram в JSON — только то, что вызывающий задал явно.
@@ -395,8 +401,15 @@ class Responder:
                 document=BufferedInputFile(data, method.filename),
                 caption=method.caption,
             )
+            # Отдельный бюджет: документ — единственный тяжёлый вызов, и общий
+            # per-request default сессии (15 с, ужат ради быстрого обнаружения
+            # мёртвого long-poll — см. __main__._SESSION_TIMEOUT) мегабайтной
+            # загрузке через прокси заведомо мал.
+            kwargs: dict[str, Any] = {"request_timeout": _UPLOAD_TIMEOUT}
+        else:
+            kwargs = {}
         try:
-            return await bot(method)
+            return await bot(method, **kwargs)
         except TelegramBadRequest as exc:
             if item.on_error == "not_modified" and "not modified" in str(exc).lower():
                 return None
