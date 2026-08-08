@@ -22,7 +22,7 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from dishka import AsyncContainer
 from dishka.integrations.aiogram import ContainerMiddleware, inject_router
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from .admin import router as admin_router
 from .config import ROOT, Config, load_config
@@ -183,7 +183,7 @@ def _run_migrations(db_url: str) -> None:
 
 
 def build_dispatcher(
-    container: AsyncContainer, admin_ids: frozenset[int], write_lock: asyncio.Lock | None = None
+    container: AsyncContainer, admin_ids: frozenset[int], write_lock: asyncio.Lock
 ) -> Dispatcher:
     """Собирает диспетчер в том единственном порядке, который имеет значение.
 
@@ -215,11 +215,12 @@ def build_dispatcher(
     # замка, ни транзакции записи. См. AccessGateMiddleware.
     dp.update.middleware(AccessGateMiddleware(admin_ids))
     # Один замок записи на процесс, и это инвариант L4, а не деталь: тот же
-    # объект берёт фоновый отправщик очереди. Передаётся параметром, а не
-    # добирается вызывающим из dp[...] по строковому ключу: опечатка в ключе
-    # или второй Lock «по умолчанию» тихо расщепили бы единственного писателя
-    # на двух, и замок перестал бы что-либо гарантировать.
-    dp.update.middleware(DbSessionMiddleware(write_lock or asyncio.Lock()))
+    # объект берёт фоновый отправщик очереди. Параметр ОБЯЗАТЕЛЬНЫЙ, без
+    # умолчания: default вида `write_lock or Lock()` тихо чеканил бы второй
+    # замок каждому, кто забыл его передать, — единственный писатель
+    # расщеплялся бы на двух, и проигравший умирал бы «database is locked»
+    # на busy_timeout. Забытый аргумент должен падать на сборке, не в бою.
+    dp.update.middleware(DbSessionMiddleware(write_lock))
     # После DbSessionMiddleware: хранилище должно получить ту же сессию из
     # кэша области запроса.
     dp.update.middleware(FsmSessionMiddleware())
@@ -270,7 +271,8 @@ async def _run_bot(cfg: Config) -> None:
     # Дожимает ответы, чья отправка не состоялась (обычно — потому что процесс
     # умер между коммитом и отправкой; деплой убивает бота намеренно).
     sessionmaker = await container.get(async_sessionmaker[AsyncSession])
-    sender = asyncio.create_task(run_sender(bot, sessionmaker, write_lock))
+    engine = await container.get(AsyncEngine)
+    sender = asyncio.create_task(run_sender(bot, sessionmaker, engine, write_lock))
     try:
         await dp.start_polling(
             bot,
@@ -280,6 +282,11 @@ async def _run_bot(cfg: Config) -> None:
     finally:
         watchdog.cancel()
         sender.cancel()
+        # Дождаться, а не бросить: cancel() лишь планирует CancelledError, и
+        # закрытие контейнера (dispose движка) наперегонки с раскруткой
+        # отправщика оставляло бы его транзакцию брошенной посреди дозаписи —
+        # доставленная строка выживает, и следующий старт шлёт её второй раз.
+        await asyncio.gather(watchdog, sender, return_exceptions=True)
         await container.close()
 
 

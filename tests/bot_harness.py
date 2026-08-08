@@ -4,6 +4,7 @@
 конструкторе, а к сети не ходит вовсе — её подменяет RecordingSession.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -147,6 +148,9 @@ class BotHarness:
     bot: Bot
     dp: Dispatcher
     session: RecordingSession
+    # Замок записи, с которым собран диспетчер. Тесты отправщика обязаны
+    # использовать его же — свежий Lock() был бы вторым писателем.
+    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _next_update_id: int = field(default=1)
 
     def _update_id(self) -> int:
