@@ -13,3 +13,7 @@ venv/
 *.sqlite-shm
 *.sqlite-wal
 docs/code-review-*.md
+
+# IDE
+.idea/
+.vscode/
