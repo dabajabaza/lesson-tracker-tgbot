@@ -16,7 +16,7 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.methods import EditMessageText, SendMessage, TelegramMethod
+from aiogram.methods import SendMessage, TelegramMethod
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -39,9 +39,11 @@ TTL = 24 * 3600
 # Восстанавливаем только то, что сами кладём (см. models.OutboxMessage).
 # Явный список, а не поиск класса по имени: строка приходит из базы и не должна
 # уметь назвать произвольный метод Bot API.
+#
+# Правок здесь нет намеренно (см. ui.Responder.edit): отложенная правка
+# возвращает пользователя на экран, с которого он уже ушёл.
 _METHODS: dict[str, type[TelegramMethod]] = {
     SendMessage.__name__: SendMessage,
-    EditMessageText.__name__: EditMessageText,
 }
 
 

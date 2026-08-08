@@ -33,7 +33,7 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import BaseStorage
-from aiogram.types import Message, TelegramObject
+from aiogram.types import Message, TelegramObject, Update
 from dishka import AsyncContainer
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -64,18 +64,8 @@ class DbSessionMiddleware(BaseMiddleware):
         self._lock = lock
         self._pruned_at = 0.0
 
-    async def _prune(self, session: AsyncSession) -> None:
-        """Чистка старых отметок. Раз в час и ПОСЛЕ обработчика.
-
-        Порядок важен: DELETE в начале забрал бы блокировку записи SQLite на всю
-        обработку. Здесь он ложится вплотную к штатному коммиту.
-        """
-        if time.monotonic() - self._pruned_at < _PRUNE_EVERY:
-            return
-        self._pruned_at = time.monotonic()
-        await session.execute(
-            delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - _MARK_TTL)
-        )
+    def _prune_due(self) -> bool:
+        return time.monotonic() - self._pruned_at >= _PRUNE_EVERY
 
     async def _run(self, handler, event, data, ui: Responder):
         container: AsyncContainer = data["dishka_container"]
@@ -109,7 +99,6 @@ class DbSessionMiddleware(BaseMiddleware):
             await session.rollback()
             ui.discard()
             raise
-        await self._prune(session)
         # Обещания доставки ложатся в ту же транзакцию, что и операция.
         await ui.persist(session)
         await session.commit()
@@ -120,12 +109,20 @@ class DbSessionMiddleware(BaseMiddleware):
 
         Второй короткой транзакцией — двумя миллисекундными вместо одной на
         весь круг до Telegram, ровно тот размен, ради которого затевался
-        разворот порядка. Здесь два дела:
+        разворот порядка. Здесь три дела:
 
         * удалить строки outbox, чьи сообщения ушли (оставшиеся дожмёт
           outbox.py);
         * дописать id отправленных подсказок в состояние FSM — message_id
-          существует только после отправки.
+          существует только после отправки;
+        * раз в час вычистить просроченные отметки идемпотентности.
+
+        Чистка живёт ЗДЕСЬ, а не в транзакции апдейта. Пока она делила
+        транзакцию с оплатой, сбой обслуживающего DELETE откатывал оплату:
+        преподаватель видел «Не получилось выполнить действие» из-за уборки
+        мусора, а деньги не записывались. Обслуживание не имеет права ронять
+        бизнес-операцию, и разнести их по разным транзакциям — единственный
+        способ это гарантировать.
 
         Потеря этой транзакции (смерть процесса в узком окне после отправки)
         безобидна в обе стороны: неудалённую строку outbox отправщик пошлёт
@@ -133,7 +130,8 @@ class DbSessionMiddleware(BaseMiddleware):
         одной неубранной подсказки в чате.
         """
         delivered = ui.delivered()
-        if not delivered and not ui.prompt_updates:
+        prune = self._prune_due()
+        if not delivered and not ui.prompt_updates and not prune:
             return
         factory = await container.get(async_sessionmaker[AsyncSession])
         async with self._lock, factory() as session:
@@ -142,7 +140,15 @@ class DbSessionMiddleware(BaseMiddleware):
             storage = SqlAlchemyStorage(session)
             for key, message_id in ui.prompt_updates:
                 await FSMContext(storage=storage, key=key).update_data(prompt_id=message_id)
+            if prune:
+                await session.execute(
+                    delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - _MARK_TTL)
+                )
             await session.commit()
+        # Отметку времени двигаем только после успешного коммита: иначе сбой
+        # уборки отложил бы её ещё на час, и таблица росла бы тихо.
+        if prune:
+            self._pruned_at = time.monotonic()
         delivered.clear()
         ui.prompt_updates.clear()
 
@@ -163,8 +169,23 @@ class DbSessionMiddleware(BaseMiddleware):
 
         # Сеть — уже вне замка и вне транзакции. Пока эти вызовы идут, база
         # свободна и следующий апдейт обрабатывается, а не ждёт.
-        await ui.flush(data["bot"])
-        await self._settle(container, ui)
+        # finally: слив может подняться наверх (потерянный документ — см.
+        # ui.flush), но отправленное всё равно обязано быть отмечено, иначе
+        # фоновый отправщик пошлёт его второй раз.
+        try:
+            await ui.flush(data["bot"])
+        finally:
+            # Сбой уборки НЕ имеет права стать ошибкой апдейта. Операция
+            # зафиксирована, ответ отправлен; пробросив исключение отсюда, мы бы
+            # дослали пользователю «Не получилось выполнить действие» вслед за
+            # «✅ Оплата внесена» — и он ввёл бы сумму заново. Всё, что здесь
+            # может потеряться, теряется безболезненно: неудалённую строку
+            # outbox отправщик пошлёт повторно, а невыясненный prompt_id стоит
+            # одной неубранной подсказки.
+            try:
+                await self._settle(container, ui)
+            except Exception:
+                log.exception("Не удалось закрыть хвосты апдейта — операция при этом применена")
         return result
 
 
@@ -180,6 +201,14 @@ class FsmSessionMiddleware(BaseMiddleware):
 
     Регистрировать ПОСЛЕ DbSessionMiddleware — не по зависимости данных, а
     чтобы запрошенное здесь хранилище получило ту же сессию из кэша скоупа.
+
+    Здесь же обновляется data["raw_state"] — снимок, по которому aiogram
+    сопоставляет StateFilter. Его снимает FSMContextMiddleware до входа в
+    замок, поэтому при двух быстрых сообщениях подряд второе матчилось по
+    состоянию, которое первое уже успело сбросить: обработчик Flow.new_price
+    выигрывал фильтр, не находил имени в данных и уводил диалог обратно на
+    «Введите имя ученика» — сразу после того, как ученик успешно создан.
+    Перечитываем внутри замка, тем же хранилищем, что увидит обработчик.
     """
 
     async def __call__(
@@ -193,6 +222,8 @@ class FsmSessionMiddleware(BaseMiddleware):
             container: AsyncContainer = data["dishka_container"]
             storage = await container.get(BaseStorage)
             data["state"] = FSMContext(storage=storage, key=state.key)
+            data["fsm_storage"] = storage
+            data["raw_state"] = await storage.get_state(state.key)
         return await handler(event, data)
 
 
@@ -224,7 +255,16 @@ _denials = _DenialLog()
 
 
 def _invite_code_from_start(event: TelegramObject) -> str | None:
-    """Код из deep-link `/start <код>`, если он там есть."""
+    """Код из deep-link `/start <код>`, если он там есть.
+
+    Принимает и Update, и голое сообщение. Это не удобство: AccessMiddleware
+    висит на `dp.update`, то есть получает именно Update, и версия, умевшая
+    только Message, всегда возвращала None — единственный самостоятельный вход
+    для приглашённого был мёртв, а тесты этого не видели, потому что дёргали
+    middleware голым Message в обход диспетчера.
+    """
+    if isinstance(event, Update):
+        event = event.message  # type: ignore[assignment]
     if not isinstance(event, Message) or not event.text:
         return None
     if not event.text.startswith("/start"):

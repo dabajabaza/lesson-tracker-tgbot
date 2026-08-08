@@ -39,7 +39,10 @@ async def on_export(
         return
     fmt = "csv" if cb.data == "exp_csv" else "xlsx"
     await _send_export(ui, msg, students, history, cb.from_user.id, fmt)
-    ui.callback(cb, "Готово")
+    # Без «Готово»: тост уходил раньше, чем файлы, и врал при неудачной
+    # выгрузке — человек видел успех, а документа не получал. Подтверждение
+    # здесь — сами файлы; провал их отправки поднимется наверх (см. ui.flush).
+    ui.callback(cb)
 
 
 async def _send_export(

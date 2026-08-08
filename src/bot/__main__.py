@@ -10,7 +10,12 @@ import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.types import ErrorEvent
 from alembic import command
 from alembic.config import Config as AlembicConfig
@@ -28,6 +33,15 @@ from .storage import ReadOnlyFsmView
 from .watchdog import run_watchdog, sd_notify
 
 _ERROR_TEXT = "⚠️ Не получилось выполнить действие. Попробуйте ещё раз."
+
+# Беды старта, которые проходят сами. TelegramServerError (5xx) и
+# TelegramRetryAfter (429) — прямые наследники TelegramAPIError, а не
+# TelegramNetworkError, поэтому прежнее условие считало их фатальными: обычный
+# 502 на getMe сразу после деплоя убивал процесс. С Restart=always и
+# StartLimitBurst это означало, что четверть часа недоступности Telegram
+# сжигала лимит рестартов и оставляла юнит в failed — до ручного
+# systemctl reset-failed, ровно то, что цикл ретраев обязан предотвращать.
+_RETRYABLE = (TelegramNetworkError, TelegramServerError, TelegramRetryAfter)
 _LOCK_NAME = "lesson-tracker-selfhosted.lock"
 
 # Тюнинг под нестабильную сеть (смена wifi/кабель, провалы прокси).
@@ -70,7 +84,7 @@ async def _establish_connection(bot: Bot):
             await bot.delete_webhook(drop_pending_updates=False)
             return me
         except Exception as e:
-            if isinstance(e, TelegramAPIError) and not isinstance(e, TelegramNetworkError):
+            if isinstance(e, TelegramAPIError) and not isinstance(e, _RETRYABLE):
                 raise  # 401/битый токен/битые настройки — ретрай не спасёт
             # ProxyConnectionError, сеть, таймаут, DNS — ждём и пробуем снова.
             sd_notify(f"EXTEND_TIMEOUT_USEC={_START_EXTEND_USEC}")
@@ -196,10 +210,6 @@ def build_dispatcher(container: AsyncContainer, admin_ids: frozenset[int]) -> Di
 
 
 async def _run_bot() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
-    _lock = _acquire_single_instance_lock()  # держим ссылку до конца процесса
     cfg = load_config()
 
     container = build_container(cfg)
@@ -241,15 +251,26 @@ async def _run_bot() -> None:
 
 
 def main() -> None:
-    """Синхронная точка входа: миграции, потом бот.
+    """Синхронная точка входа: замок, миграции, бот.
 
-    Порядок вынужденный, а не стилистический. alembic внутри поднимает свой
-    цикл событий, поэтому вызвать его из уже работающего asyncio.run нельзя —
-    получим «cannot be called from a running event loop».
+    Замок берётся ПЕРВЫМ, и это не косметика. Миграции — самый опасный писатель
+    в базу: вторая копия (ручной `python -m bot` рядом с юнитом, или деплой,
+    рестартующий бота, пока старый процесс ещё жив) успевала бы применить
+    `upgrade head` к живой базе и только потом умереть с «Бот уже запущен».
+    Для миграции с batch-режимом это означает пересборку таблицы под работающим
+    ботом: строки, записанные им в этот момент, просто исчезают.
+
+    Порядок «миграции до asyncio.run» вынужденный, а не стилистический: alembic
+    внутри поднимает свой цикл событий, и позвать его из уже работающего
+    asyncio.run нельзя — получим «cannot be called from a running event loop».
     """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    # Ссылку держит кадр main() на всё время asyncio.run: ядро снимает
+    # блокировку вместе со смертью процесса, так что достаточно не дать
+    # сборщику мусора закрыть сокет (или файл) раньше времени.
+    _lock = _acquire_single_instance_lock()
     cfg = load_config()
     logging.info("Применяю миграции БД")
     _run_migrations(cfg.db_url)

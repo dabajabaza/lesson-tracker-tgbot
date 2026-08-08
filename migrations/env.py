@@ -58,7 +58,15 @@ if injected_connection is not None:
     do_run_migrations(injected_connection)
 else:
     if config.config_file_name is not None:
-        fileConfig(config.config_file_name)
+        # disable_existing_loggers=False обязателен. По умолчанию fileConfig
+        # НАВСЕГДА выключает все уже созданные логгеры — а миграции в проде
+        # выполняются внутри процесса бота (см. __main__.main), после первого
+        # logging.basicConfig. Без флага bot.*, aiogram.* и watchdog замолкают
+        # на весь срок жизни процесса, и второй basicConfig этого не чинит:
+        # отказы доступа, «апдейт уже применён», сбои доставки и предупреждения
+        # сторожа просто исчезают из журнала. В тестах ветка не выполняется
+        # (там передаётся готовое соединение), поэтому дефект жил незамеченным.
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
     config.set_main_option("sqlalchemy.url", load_config().db_url)
     if context.is_offline_mode():
         run_migrations_offline()

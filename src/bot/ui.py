@@ -31,9 +31,13 @@ from aiogram.methods import (
 from aiogram.types import CallbackQuery, InputFile, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import OutboxMessage
+from .models import OutboxMessage, now_ts
 
 log = logging.getLogger(__name__)
+
+# Сколько строка outbox «принадлежит» штатной отправке, прежде чем её увидит
+# фоновый отправщик. С запасом больше круга до Telegram и тика поллера.
+OUTBOX_GRACE = 60
 
 
 def _dump(method: TelegramMethod[Any]) -> str:
@@ -107,7 +111,19 @@ class Responder:
         )
 
     def edit(self, message: Message, text: str, reply_markup: Any = None) -> None:
-        """Правка сообщения, терпимая к повторному нажатию той же кнопки."""
+        """Правка сообщения, терпимая к повторному нажатию той же кнопки.
+
+        НЕ персистентна, в отличие от отправки. Правка — это состояние экрана в
+        конкретном сообщении, а не факт; воспроизведённая через минуту, она
+        затирает то, куда пользователь успел уйти. Сценарий не гипотетический:
+        списание не доставилось, человек нажал «⬅️ К списку», а отложенная
+        правка вернула ему карточку ученика поверх списка — с устаревшим
+        балансом и старыми кнопками. Очередь несёт сообщения, а не экраны.
+
+        Плата: не доставленная правка карточки не будет повторена. Операция при
+        этом применена, а следующий экран покажет правду — цена меньше, чем у
+        отката пользователя в прошлое.
+        """
         self._queue.append(
             _Pending(
                 EditMessageText(
@@ -117,16 +133,22 @@ class Responder:
                     reply_markup=reply_markup,
                 ),
                 on_error="not_modified",
-                durable=True,
             )
         )
 
     def callback(
         self, cb: CallbackQuery, text: str | None = None, *, show_alert: bool = False
     ) -> None:
-        """Погасить «часики» на кнопке, при необходимости с текстом."""
+        """Погасить «часики» на кнопке, при необходимости с текстом.
+
+        Провал не важен: Telegram принимает ответ на нажатие считаные секунды,
+        и если окно закрылось, повторять нечего — «часики» гаснут сами.
+        """
         self._queue.append(
-            _Pending(AnswerCallbackQuery(callback_query_id=cb.id, text=text, show_alert=show_alert))
+            _Pending(
+                AnswerCallbackQuery(callback_query_id=cb.id, text=text, show_alert=show_alert),
+                on_error="quiet",
+            )
         )
 
     def document(
@@ -159,8 +181,21 @@ class Responder:
         коммитом и отправкой оставляла бы применённую операцию без ответа —
         а именно этого разворот порядка и не должен был стоить.
         """
+        # next_attempt_at со сдвигом: штатная отправка идёт сразу после коммита
+        # и занимает сотни миллисекунд. Строка, доступная отправщику мгновенно,
+        # попадала бы под тик поллера прямо в это окно — и пользователь получал
+        # бы один и тот же ответ дважды в обычном режиме, а не после падения.
+        # Отправщик обязан видеть только то, что штатный путь уже не удалит.
+        due = now_ts() + OUTBOX_GRACE
         rows = [
-            (item, OutboxMessage(method=type(item.method).__name__, payload=_dump(item.method)))
+            (
+                item,
+                OutboxMessage(
+                    method=type(item.method).__name__,
+                    payload=_dump(item.method),
+                    next_attempt_at=due,
+                ),
+            )
             for item in self._queue
             if item.durable
         ]
@@ -191,33 +226,38 @@ class Responder:
         Буфер опустошается ДО отправки: повторный слив (например, из
         обработчика ошибок) не должен отправить то же самое дважды.
 
-        Ошибка одного вызова не отменяет остальные. Раньше исключение отсюда
-        рвало транзакцию и это было осмысленно; теперь транзакция давно
-        закрыта, и бросить всё на первом сбое означало бы просто не отправить
-        то, что ещё могло уйти. Персистентные вызовы останутся в outbox и
-        будут дожаты, о прочих — запись в лог.
+        Ошибка одного вызова не отменяет остальные: транзакция давно закрыта, и
+        бросить всё на первом сбое означало бы просто не отправить то, что ещё
+        могло уйти. Ловим Exception целиком, а не TelegramAPIError — апдейт уже
+        применён, и никакая беда доставки не имеет права его отменить.
 
-        Ловим Exception целиком, а не TelegramAPIError: на этом этапе апдейт
-        уже применён и зафиксирован, и никакая беда доставки не должна его
-        отменять — тем более превращаться в «попробуйте ещё раз» для
-        операции, которая на самом деле удалась.
+        Но молчать можно не про всякий сбой. Персистентный вызов дожмёт
+        отправщик, косметический никому не нужен — а вот потерянный документ
+        пользователь не получит никогда, и сделать вид, что всё хорошо, значит
+        солгать. Такой сбой поднимается наверх ПОСЛЕ того, как остальная
+        очередь ушла: обработчик ошибок aiogram скажет человеку правду.
         """
         queued, self._queue = self._queue, []
+        lost: Exception | None = None
         for item in queued:
             try:
                 result = await self._send(bot, item)
-            except Exception:
+            except Exception as exc:
                 log.warning(
                     "Не удалось отправить %s%s",
                     type(item.method).__name__,
                     " — останется в очереди" if item.outbox_id else "",
                     exc_info=True,
                 )
+                if item.outbox_id is None and item.on_error != "quiet":
+                    lost = lost or exc
                 continue
             if item.outbox_id is not None:
                 self._delivered.append(item.outbox_id)
             if item.prompt_for is not None and isinstance(result, Message):
                 self.prompt_updates.append((item.prompt_for, result.message_id))
+        if lost is not None:
+            raise lost
 
     @staticmethod
     async def _send(bot: Bot, item: _Pending) -> Any:

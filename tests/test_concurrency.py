@@ -15,9 +15,12 @@ SQLite допускает одного писателя. aiogram обрабат�
 import asyncio
 import sqlite3
 
-from sqlalchemy import select
+from aiogram.fsm.storage.base import StorageKey
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncEngine
 
-from bot.models import Student
+from bot.db import READONLY
+from bot.models import FsmRecord, Student
 from bot.services import StudentService
 from tests.bot_harness import make_update_callback
 
@@ -118,3 +121,51 @@ async def test_во_время_сети_база_свободна_для_зап�
 
     assert free, "апдейт обязан был сходить в Telegram"
     assert all(free), "во время вызова Telegram транзакция апдейта должна быть уже закрыта"
+
+
+async def test_readonly_соединение_не_берёт_блокировку_записи(engine, db_path):
+    """Пометка READONLY (db.py) открывает транзакцию как DEFERRED.
+
+    С контрольным случаем рядом: без пометки то же самое чтение блокировку
+    берёт. Пара нужна целиком — сама по себе первая половина прошла бы и на
+    движке, который вообще не открывает транзакций.
+    """
+    stmt = select(FsmRecord.state).where(FsmRecord.key == "нет-такого")
+
+    async with engine.connect() as conn:
+        ro = await conn.execution_options(**{READONLY: True})
+        await ro.execute(stmt)
+        assert _write_lock_free(db_path), "читающее соединение не должно держать запись"
+
+    async with engine.connect() as conn:
+        await conn.execute(stmt)
+        assert not _write_lock_free(db_path), (
+            "без пометки транзакция обязана оставаться IMMEDIATE — иначе пометка ничего не значит"
+        )
+
+
+async def test_хранилище_диспетчера_читает_помеченным_соединением(harness):
+    """Хранилище диспетчера читает raw_state ДО общего замка (см. storage.py).
+
+    Пока его транзакция открывалась как IMMEDIATE, каждый апдейт забирал
+    блокировку записи снаружи всякой сериализации: замок переставал что-либо
+    гарантировать, а под нагрузкой апдейт умирал с «database is locked» там,
+    где нет ни отката, ни отметки идемпотентности.
+
+    Проверяется по фактически отправленному SQL, а не по флагу в объекте:
+    пометку легко потерять по дороге, и заметить это должен тест, а не прод.
+    """
+    engine = await harness.dp.storage._container.get(AsyncEngine)  # noqa: SLF001
+    seen: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _record(_conn, _cursor, statement, *_args):  # noqa: ANN001, ANN202
+        if statement.startswith("BEGIN"):
+            seen.append(statement)
+
+    try:
+        await harness.dp.storage.get_state(StorageKey(bot_id=1, chat_id=A, user_id=A))
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _record)
+
+    assert seen == ["BEGIN"], f"ожидался DEFERRED, а ушло: {seen}"

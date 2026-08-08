@@ -12,6 +12,7 @@ import logging
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from dishka import FromDishka
 from sqlalchemy import select
@@ -26,6 +27,19 @@ log = logging.getLogger(__name__)
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
+
+async def _stop_dialog(state: FSMContext) -> None:
+    """Админская команда прерывает начатый ввод — как /start и /menu.
+
+    Роутер админки подключён раньше основного, так что его обработчики
+    забирают апдейт целиком и до сброса состояния дело не доходило. Диалог
+    оставался открытым: преподаватель нажимал «Внести оплату», вместо суммы
+    набирал /invite — и следующее же число, отправленное по любому поводу,
+    молча уходило в оплату этому ученику.
+    """
+    await state.clear()
+
+
 _ALLOW_USAGE = (
     "Использование: <code>/allow &lt;telegram_id&gt;</code>\n\n"
     "Узнать id можно у @userinfobot. Для одноразовой ссылки — /invite."
@@ -39,12 +53,14 @@ def _is_admin(message: Message, admin_ids: frozenset[int]) -> bool:
 @router.message(Command("invite"))
 async def cmd_invite(
     message: Message,
+    state: FSMContext,
     session: AsyncSession,
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
 ) -> None:
     if not _is_admin(message, admin_ids):
         return
+    await _stop_dialog(state)
     assert message.from_user is not None and message.bot is not None
 
     invite = await access.create_invite(session, message.from_user.id)
@@ -68,6 +84,7 @@ async def cmd_invite(
 @router.message(Command("allow"))
 async def cmd_allow(
     message: Message,
+    state: FSMContext,
     command: CommandObject,
     session: AsyncSession,
     admin_ids: frozenset[int],
@@ -75,6 +92,7 @@ async def cmd_allow(
 ) -> None:
     if not _is_admin(message, admin_ids):
         return
+    await _stop_dialog(state)
     assert message.from_user is not None
 
     args = (command.args or "").strip()
@@ -93,6 +111,7 @@ async def cmd_allow(
 @router.message(Command("access"))
 async def cmd_access(
     message: Message,
+    state: FSMContext,
     session: AsyncSession,
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
@@ -100,6 +119,7 @@ async def cmd_access(
     """Показать, кто допущен и какие приглашения ещё не погашены."""
     if not _is_admin(message, admin_ids):
         return
+    await _stop_dialog(state)
 
     rows = list(await session.scalars(select(AllowedUser)))
     live = list(

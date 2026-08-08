@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import (
 
 from .models import Base
 
+# Помечает соединение как заведомо читающее: транзакция откроется как DEFERRED
+# и блокировку записи не тронет. Ставится через execution_options — см.
+# storage.ReadOnlyFsmView, единственного законного потребителя.
+READONLY = "lesson_tracker_readonly"
+
 
 def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     engine = create_async_engine(db_url, echo=False)
@@ -35,19 +40,32 @@ def create_db(db_url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession
 
         @event.listens_for(engine.sync_engine, "begin")
         def _sqlite_begin(conn):  # noqa: ANN001
-            # Раз драйвер больше не начинает транзакции сам, начинаем явно —
-            # и сразу IMMEDIATE, то есть забирая блокировку записи на входе.
+            # Раз драйвер больше не начинает транзакции сам, начинаем явно.
             #
-            # Обычный BEGIN (DEFERRED) берёт её только на первой записи, уже
-            # прочитав данные. Два таких писателя читают общий снимок, и второй
-            # получает не ожидание, а мгновенный «database is locked»: ждать
-            # нечего, его снимок устарел, busy_timeout тут не помогает вовсе.
-            # С IMMEDIATE опоздавший честно ждёт на busy_timeout.
+            # IMMEDIATE, то есть забирая блокировку записи на входе. Обычный
+            # BEGIN (DEFERRED) берёт её только на первой записи, уже прочитав
+            # данные. Два таких писателя читают общий снимок, и второй получает
+            # не ожидание, а мгновенный «database is locked»: ждать нечего, его
+            # снимок устарел, busy_timeout тут не помогает вовсе. С IMMEDIATE
+            # опоздавший честно ждёт на busy_timeout.
             #
             # Внутри процесса до этого не доходит — пишущие апдейты сериализует
             # замок в DbSessionMiddleware. IMMEDIATE прикрывает писателя со
             # стороны: миграцию на старте, ручной скрипт над боевой базой.
-            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            #
+            # Кроме соединений, помеченных READONLY. Им нужен DEFERRED: в WAL
+            # читатель не берёт блокировку записи вовсе, а IMMEDIATE взял бы её
+            # и на чистом SELECT. Ровно это и происходило с хранилищем
+            # диспетчера (storage.ReadOnlyFsmView): оно читает raw_state ДО
+            # того, как апдейт войдёт в общий замок, и каждый апдейт молча
+            # забирал блокировку записи снаружи всякой сериализации. Замок
+            # переставал что-либо гарантировать, а сверх busy_timeout апдейт
+            # умирал с «database is locked» там, где нет ни отката, ни отметки
+            # идемпотентности.
+            if conn.get_execution_options().get(READONLY):
+                conn.exec_driver_sql("BEGIN")
+            else:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
 
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     return engine, sessionmaker
