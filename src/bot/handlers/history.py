@@ -10,7 +10,7 @@ from ..render import describe_operation
 from ..services import HistoryService, StudentService, ViewPrefService
 from ..ui import Responder
 from ..views import card_view, history_view
-from ._common import as_int, menu, message_of, parts_of
+from ._common import as_int, menu, message_of, parts_of, screen_of, show_menu
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -41,9 +41,8 @@ async def on_undo(
     history: FromDishka[HistoryService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     op = await history.peek_last(cb.from_user.id)
     if not op:
@@ -66,9 +65,8 @@ async def on_undo_yes(
     prefs: FromDishka[ViewPrefService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     _cmd, a1, _a2 = parts_of(cb)
     res = await history.undo_last(cb.from_user.id, as_int(a1))
@@ -99,9 +97,4 @@ async def on_undo_no(
     prefs: FromDishka[ViewPrefService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    if msg is None:
-        ui.callback(cb)
-        return
-    ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
-    ui.callback(cb)
+    await show_menu(cb, ui, students, prefs)

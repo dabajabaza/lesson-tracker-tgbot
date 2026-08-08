@@ -23,7 +23,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from .db import READONLY
-from .models import OutboxMessage, now_ts
+from .models import OutboxMessage, ProcessedUpdate, now_ts
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +41,12 @@ BACKOFF_MAX = 3600
 # Через сколько сдаться. Ответ суточной давности пользователю уже не нужен, а
 # таблица не должна расти вечно.
 TTL = 24 * 3600
+# TTL отметок идемпотентности: Telegram держит неподтверждённые апдейты сутки,
+# так что неделя — с большим запасом. Уборка обеих таблиц живёт здесь, на
+# фоновом часе: раньше чистка отметок была вторым, дублирующим экземпляром той
+# же машинерии в _settle — со своим таймером, своими константами и лишней
+# транзакцией на пути апдейта.
+MARK_TTL = 7 * 24 * 3600
 
 # Восстанавливаем только то, что сами кладём (см. models.OutboxMessage).
 # Явный список, а не поиск класса по имени: строка приходит из базы и не должна
@@ -199,14 +205,19 @@ def _grouped_by_time(retry: list[tuple[int, int, int]]):
 
 
 async def purge_expired(sessionmaker: async_sessionmaker[AsyncSession], lock: asyncio.Lock) -> None:
-    """Убрать просроченное, до чего не дошли руки в deliver_batch.
+    """Часовая уборка обеих таблиц-очередей.
 
-    Строка с далёким next_attempt_at в выборку не попадает, а протухнуть
-    успевает — без этого она осталась бы в таблице навсегда.
+    outbox: строка с далёким next_attempt_at в выборку deliver_batch не
+    попадает, а протухнуть успевает — без этого она осталась бы навсегда.
+    processed_updates: отметки идемпотентности старше недели никого не
+    защищают (Telegram хранит неподтверждённые апдейты сутки).
     """
     async with lock, sessionmaker() as session:
         await session.execute(
             delete(OutboxMessage).where(OutboxMessage.created_at < now_ts() - TTL)
+        )
+        await session.execute(
+            delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - MARK_TTL)
         )
         await session.commit()
 

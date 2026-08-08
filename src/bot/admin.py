@@ -9,7 +9,7 @@
 
 import logging
 
-from aiogram import F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -28,22 +28,27 @@ router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 
-async def _stop_dialog(state: FSMContext) -> None:
-    """Админская команда прерывает начатый ввод — как /start и /menu.
+class _DialogInterrupt(BaseMiddleware):
+    """Любая админская команда прерывает начатый ввод — как /start и /menu.
 
-    Роутер админки подключён раньше основного, так что его обработчики
-    забирают апдейт целиком и до сброса состояния дело не доходило. Диалог
-    оставался открытым: преподаватель нажимал «Внести оплату», вместо суммы
-    набирал /invite — и следующее же число, отправленное по любому поводу,
-    молча уходило в оплату этому ученику.
-
-    Зовётся ДО проверки прав, а не после. Апдейт поглощён этим роутером
-    независимо от того, админ его прислал или нет: фильтр Command срабатывает
-    для всех, а обработчик просто молчит в ответ непривилегированному. Пока
-    сброс стоял после проверки, допущенный неадмин (а таких впускает инвайт)
-    получал ровно ту же ловушку, от которой избавили админов.
+    Middleware, а не вызов в каждом обработчике: роутер админки подключён
+    раньше основного и забирает апдейт целиком, так что забытый сброс в
+    четвёртой будущей команде оставил бы диалог открытым — преподаватель
+    нажимал «Внести оплату», вместо суммы набирал /invite, и следующее его
+    число молча уходило в оплату. Inner-middleware выполняется после матча
+    фильтра, то есть ровно для команд ЭТОГО роутера — и до проверки прав:
+    фильтр Command срабатывает для всех, обработчик лишь молчит
+    непривилегированному, а ловушка с висящим диалогом была бы общей.
     """
-    await state.clear()
+
+    async def __call__(self, handler, event, data):
+        state: FSMContext | None = data.get("state")
+        if state is not None:
+            await state.clear()
+        return await handler(event, data)
+
+
+router.message.middleware(_DialogInterrupt())
 
 
 _ALLOW_USAGE = (
@@ -59,12 +64,10 @@ def _is_admin(message: Message, admin_ids: frozenset[int]) -> bool:
 @router.message(Command("invite"))
 async def cmd_invite(
     message: Message,
-    state: FSMContext,
     session: AsyncSession,
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
 ) -> None:
-    await _stop_dialog(state)
     if not _is_admin(message, admin_ids):
         return
     assert message.from_user is not None and message.bot is not None
@@ -90,13 +93,11 @@ async def cmd_invite(
 @router.message(Command("allow"))
 async def cmd_allow(
     message: Message,
-    state: FSMContext,
     command: CommandObject,
     session: AsyncSession,
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
 ) -> None:
-    await _stop_dialog(state)
     if not _is_admin(message, admin_ids):
         return
     assert message.from_user is not None
@@ -120,13 +121,11 @@ async def cmd_allow(
 @router.message(Command("access"))
 async def cmd_access(
     message: Message,
-    state: FSMContext,
     session: AsyncSession,
     admin_ids: frozenset[int],
     ui: FromDishka[Responder],
 ) -> None:
     """Показать, кто допущен и какие приглашения ещё не погашены."""
-    await _stop_dialog(state)
     if not _is_admin(message, admin_ids):
         return
 

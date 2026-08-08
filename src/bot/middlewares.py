@@ -26,7 +26,6 @@ locked» на повышении блокировки — операция те�
 
 import asyncio
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -39,16 +38,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from . import access
-from .models import OutboxMessage, ProcessedUpdate, now_ts
+from .models import OutboxMessage, ProcessedUpdate
 from .storage import SqlAlchemyStorage
 from .ui import Responder
 
 log = logging.getLogger(__name__)
-
-# Telegram держит неподтверждённые апдейты сутки, так что недели отметок с
-# запасом хватает, а таблица не растёт бесконечно.
-_MARK_TTL = 7 * 24 * 3600
-_PRUNE_EVERY = 3600
 
 # Ключ в data: апдейт отброшен контролем доступа и обработчика не видел.
 # Живёт в общем словаре, потому что обе стороны — inner-middleware одного
@@ -121,10 +115,6 @@ class DbSessionMiddleware(BaseMiddleware):
         # фоновому отправщику (outbox.py) — писатель в SQLite один на процесс,
         # и фоновая задача из этого правила не исключение.
         self._lock = lock
-        self._pruned_at = 0.0
-
-    def _prune_due(self) -> bool:
-        return time.monotonic() - self._pruned_at >= _PRUNE_EVERY
 
     async def _run(self, handler, event, data, ui: Responder):
         container: AsyncContainer = data["dishka_container"]
@@ -177,8 +167,12 @@ class DbSessionMiddleware(BaseMiddleware):
             # об операции, которой не случилось.
             await session.commit()
         except Exception:
-            # Откат здесь, а не только в провайдере, — страховка (см. ниже) и
-            # заодно сброс намерений: апдейт не состоялся, говорить не о чем.
+            # Строго говоря, провайдер откатил бы и сам: ErrorsMiddleware у
+            # aiogram 3 — внешнейший на dp.update (регистрируется первым в
+            # Dispatcher.__init__), так что скоуп dishka закрывается — с
+            # откатом — раньше, чем on_error получит слово. Явный откат тут
+            # страховка на случай смены этих порядков, а вот сброс намерений
+            # обязателен по-настоящему: апдейт не состоялся, говорить не о чем.
             await session.rollback()
             ui.discard()
             raise
@@ -195,15 +189,13 @@ class DbSessionMiddleware(BaseMiddleware):
           outbox.py);
         * дописать id отправленных подсказок в состояние FSM — message_id
           существует только после отправки;
-        * закрыть диалоги, чью подсказку не удалось показать вовсе;
-        * раз в час вычистить просроченные отметки идемпотентности.
+        * закрыть диалоги, чью подсказку не удалось показать вовсе.
 
-        Чистка живёт ЗДЕСЬ, а не в транзакции апдейта. Пока она делила
-        транзакцию с оплатой, сбой обслуживающего DELETE откатывал оплату:
-        преподаватель видел «Не получилось выполнить действие» из-за уборки
-        мусора, а деньги не записывались. Обслуживание не имеет права ронять
-        бизнес-операцию, и разнести их по разным транзакциям — единственный
-        способ это гарантировать.
+        Обслуживания здесь больше нет: уборка обеих таблиц-очередей живёт у
+        фонового отправщика (outbox.purge_expired), на его часовом таймере.
+        Держать второй экземпляр той же машинерии на пути апдейта значило
+        проверять таймер на каждом апдейте и уметь дважды ошибаться в одном
+        и том же.
 
         Потеря этой транзакции (смерть процесса в узком окне после отправки)
         безобидна в обе стороны: неудалённую строку outbox отправщик пошлёт
@@ -211,8 +203,7 @@ class DbSessionMiddleware(BaseMiddleware):
         одной неубранной подсказки в чате.
         """
         delivered = ui.delivered()
-        prune = self._prune_due()
-        if not delivered and not ui.prompt_updates and not ui.failed_prompts and not prune:
+        if not delivered and not ui.prompt_updates and not ui.failed_prompts:
             return
         factory = await container.get(async_sessionmaker[AsyncSession])
         async with self._lock, factory() as session:
@@ -242,15 +233,7 @@ class DbSessionMiddleware(BaseMiddleware):
                     continue
                 await ctx.clear()
                 log.warning("Диалог %s закрыт: подсказку не удалось показать", key)
-            if prune:
-                await session.execute(
-                    delete(ProcessedUpdate).where(ProcessedUpdate.created_at < now_ts() - _MARK_TTL)
-                )
             await session.commit()
-        # Отметку времени двигаем только после успешного коммита: иначе сбой
-        # уборки отложил бы её ещё на час, и таблица росла бы тихо.
-        if prune:
-            self._pruned_at = time.monotonic()
         delivered.clear()
         ui.prompt_updates.clear()
         ui.failed_prompts.clear()

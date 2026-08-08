@@ -58,7 +58,7 @@ async def run_watchdog(bot, *, interval: float, probe_timeout: float) -> None:
             # по какой-то причине не сработает (дедлок вне HTTP-запроса).
             async with asyncio.timeout(probe_timeout + 5):
                 await bot.get_me(request_timeout=int(probe_timeout))
-        except Exception as e:  # noqa: BLE001 — любой сбой пробы = «нездоров»
+        except Exception as e:
             log.warning(
                 "проба Telegram не прошла (%s) — systemd не пингуем, "
                 "ждём авто-рестарт по WatchdogSec.",

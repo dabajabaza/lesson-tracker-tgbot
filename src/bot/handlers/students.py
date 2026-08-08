@@ -15,7 +15,7 @@ from ..services import StudentService, ViewPrefService
 from ..states import Flow
 from ..ui import Responder
 from ..views import card_view, search_results_view
-from ._common import as_int, menu, message_of, money_error, owner, target_of
+from ._common import as_int, menu, money_error, owner, screen_of, target_of
 
 MAX_NAME_LEN = 80
 
@@ -44,9 +44,8 @@ async def on_card(
 
 @router.callback_query(F.data == "add")
 async def on_add(cb: CallbackQuery, state: FSMContext, ui: FromDishka[Responder]) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     await state.set_state(Flow.new_name)
     await state.update_data(prompt_id=msg.message_id)
@@ -194,8 +193,11 @@ async def on_price_change(
     await state.clear()
     ui.delete(message.chat.id, data.get("prompt_id"))
     if not s:
-        text, kb = await menu(students, prefs, owner(message))
-        ui.reply(message, text, reply_markup=kb)
+        # НЕ `text`: эта переменная выше — проверенный ввод пользователя, и
+        # перепривязка молча подсовывала бы текст экрана любому будущему
+        # логу/аудиту суммы ниже по функции.
+        menu_text, kb = await menu(students, prefs, owner(message))
+        ui.reply(message, menu_text, reply_markup=kb)
         return
     ui.confirm(
         message,
@@ -210,9 +212,8 @@ async def on_price_change(
 
 @router.callback_query(F.data == "search")
 async def on_search_start(cb: CallbackQuery, state: FSMContext, ui: FromDishka[Responder]) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     await state.set_state(Flow.search)
     await state.update_data(prompt_id=msg.message_id)

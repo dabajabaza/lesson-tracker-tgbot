@@ -163,4 +163,4 @@ async def harness(container: AsyncContainer) -> AsyncIterator[BotHarness]:
         # вовсе.
         await harness.dp.emit_shutdown()
         for router in _SHARED_ROUTERS:
-            router._parent_router = None  # noqa: SLF001
+            router._parent_router = None

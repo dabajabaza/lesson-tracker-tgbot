@@ -229,7 +229,7 @@ async def test_сбой_уборки_не_превращает_успех_в_о�
     """
     import bot.middlewares as mw
 
-    async def boom(self, container, ui):  # noqa: ANN001, ANN202, ARG001
+    async def boom(self, container, ui):
         raise RuntimeError("вторая транзакция не открылась")
 
     monkeypatch.setattr(mw.DbSessionMiddleware, "_settle", boom)
@@ -483,7 +483,7 @@ async def test_пустой_тик_поллера_не_трогает_блоки
     immediate: list[str] = []
 
     @event.listens_for(engine.sync_engine, "before_cursor_execute")
-    def _record(_conn, _cursor, statement, *_args):  # noqa: ANN202
+    def _record(_conn, _cursor, statement, *_args):
         if statement.startswith("BEGIN IMMEDIATE"):
             immediate.append(statement)
 

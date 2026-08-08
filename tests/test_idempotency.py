@@ -11,7 +11,6 @@ Telegram подтверждает апдейт только следующим �
 не увидели — здесь всё идёт через настоящий диспетчер.
 """
 
-import time
 from unittest.mock import patch
 
 from bot import access
@@ -19,6 +18,7 @@ from bot.models import ProcessedUpdate
 from bot.services import StudentService
 from tests.bot_harness import make_update_message
 from tests.reading import processed_update_ids, student_prices
+from tests.test_concurrency import _write_lock_free
 
 ADMIN = 1
 
@@ -94,17 +94,18 @@ async def test_упавший_обработчик_не_отмечается_и_
     assert await student_prices(sessionmaker) == [("Лера", 160000)]
 
 
-async def test_старые_отметки_вычищаются(harness, sessionmaker, monkeypatch):
+async def test_старые_отметки_вычищаются(harness, sessionmaker):
     """Иначе таблица растёт вечно. TTL — неделя при суточном хранении у
-    Telegram, с запасом."""
-    import bot.middlewares as mw
+    Telegram, с запасом. Уборка живёт у фонового отправщика, на его часе, —
+    а не на пути апдейта."""
+    from bot import outbox
 
     async with sessionmaker() as s:
         s.add(ProcessedUpdate(update_id=1, created_at=1))  # 1970 год
         await s.commit()
+    await harness.send("привет", user_id=ADMIN)  # свежая отметка
 
-    monkeypatch.setattr(mw, "_PRUNE_EVERY", 0)  # чистка на ближайшем апдейте
-    await harness.send("привет", user_id=ADMIN)
+    await outbox.purge_expired(sessionmaker, harness.write_lock)
 
     marks = await processed_update_ids(sessionmaker)
     assert 1 not in marks, "просроченная отметка должна быть удалена"
@@ -145,37 +146,37 @@ async def test_допущенный_позже_обрабатывается_но
     assert 4002 in await processed_update_ids(sessionmaker), "теперь отметка нужна"
 
 
-async def test_повтор_не_блокирует_уборку(harness, sessionmaker, monkeypatch):
+async def test_повтор_не_оставляет_открытой_транзакции(harness, sessionmaker, db_path):
     """Отброшенный повтор обязан закрыть за собой транзакцию.
 
     SELECT на проверку отметки уже открывает транзакцию, и она у нас
     IMMEDIATE — то есть держит блокировку записи. Ранний выход без отката
-    оставлял её открытой, а `_settle` тут же брал общий замок и лез за той же
-    блокировкой вторым соединением: бот вставал на все 5 секунд busy_timeout и
-    падал с «database is locked». Попадали в это ровно на восстановлении после
-    рестарта, ради которого идемпотентность и заведена: процесс умер, не успев
-    подтвердить offset, Telegram прислал апдейт заново.
+    оставлял её открытой до закрытия скоупа, и любое второе соединение того же
+    процесса (тогда — уборка в _settle) вставало на все 5 секунд busy_timeout
+    и падало с «database is locked» — ровно на восстановлении после рестарта,
+    ради которого идемпотентность и заведена.
 
-    Проверяется по времени, а не по результату: уборка в итоге проходит и с
-    дефектом — просто после того, как истечёт busy_timeout. Наблюдаемая беда
-    здесь именно простой, поэтому порог (2 с) взят заметно ниже busy_timeout
-    (5 с) и на два порядка выше нормального прогона (~10 мс).
+    Уборка с тех пор переехала к фоновому отправщику, но правило осталось:
+    после раннего выхода база обязана быть немедленно свободна для записи.
+    Проверяем вторым соединением, как в test_concurrency.
     """
-    import bot.middlewares as mw
-
-    async with sessionmaker() as s:
-        s.add(ProcessedUpdate(update_id=1, created_at=1))  # 1970 год
-        await s.commit()
-
     update = make_update_message("привет", user_id=ADMIN, update_id=7777)
     await harness.dp.feed_update(harness.bot, update)
 
-    monkeypatch.setattr(mw, "_PRUNE_EVERY", 0)  # уборка назрела
-    started = time.monotonic()
-    await harness.dp.feed_update(harness.bot, update)  # тот же update_id — повтор
-    elapsed = time.monotonic() - started
+    freed: list[bool] = []
+    import bot.middlewares as mw
 
-    assert elapsed < 2, f"повтор заблокировал бота на {elapsed:.1f} с"
-    assert 1 not in await processed_update_ids(sessionmaker), (
-        "уборка после отброшенного повтора должна была отработать"
-    )
+    original = mw.DbSessionMiddleware._run
+
+    async def probing_run(self, handler, event, data, ui):
+        result = await original(self, handler, event, data, ui)
+        freed.append(_write_lock_free(db_path))
+        return result
+
+    mw.DbSessionMiddleware._run = probing_run  # type: ignore[method-assign]
+    try:
+        await harness.dp.feed_update(harness.bot, update)  # тот же update_id — повтор
+    finally:
+        mw.DbSessionMiddleware._run = original  # type: ignore[method-assign]
+
+    assert freed == [True], "после отброшенного повтора база должна быть свободна для записи"

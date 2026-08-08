@@ -11,7 +11,7 @@ from ..keyboards import sort_menu_kb
 from ..services import StudentService, ViewPrefService
 from ..ui import Responder
 from ..views import main_menu_view
-from ._common import as_int, menu, message_of, owner, parts_of
+from ._common import as_int, menu, owner, parts_of, screen_of, show_menu
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -46,12 +46,7 @@ async def on_home(
     prefs: FromDishka[ViewPrefService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    if msg is None:
-        ui.callback(cb)
-        return
-    ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
-    ui.callback(cb)
+    await show_menu(cb, ui, students, prefs)
 
 
 @router.callback_query(F.data.startswith("list:"))
@@ -61,9 +56,8 @@ async def on_list(
     prefs: FromDishka[ViewPrefService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     _cmd, a1, a2 = parts_of(cb)
     sort = a1 if a1 in ("name", "bal", "due") else "name"
@@ -75,9 +69,8 @@ async def on_list(
 
 @router.callback_query(F.data == "sortmenu")
 async def on_sort_menu(cb: CallbackQuery, ui: FromDishka[Responder]) -> None:
-    msg = message_of(cb)
+    msg = screen_of(cb, ui)
     if msg is None:
-        ui.callback(cb)
         return
     ui.edit(msg, "↕️ Выберите сортировку:", sort_menu_kb())
     ui.callback(cb)
@@ -90,12 +83,7 @@ async def on_cancel(
     prefs: FromDishka[ViewPrefService],
     ui: FromDishka[Responder],
 ) -> None:
-    msg = message_of(cb)
-    if msg is None:
-        ui.callback(cb)
-        return
-    ui.edit(msg, *await menu(students, prefs, cb.from_user.id))
-    ui.callback(cb, "Отменено")
+    await show_menu(cb, ui, students, prefs, "Отменено")
 
 
 # Вне диалога любое сообщение показывает главное меню. Фильтр по состоянию

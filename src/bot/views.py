@@ -17,6 +17,7 @@ from .keyboards import (
     home_kb,
     main_menu_kb,
 )
+from .models import Student
 from .render import list_button_label, render_card, render_operation
 from .services import HistoryService, StudentService
 
@@ -77,7 +78,7 @@ def _query_echo(query: str) -> str:
     return query if len(query) <= _QUERY_ECHO_LIMIT else query[: _QUERY_ECHO_LIMIT - 1] + "…"
 
 
-def search_results_view(found, query) -> tuple[str, InlineKeyboardMarkup]:
+def search_results_view(found: list[Student], query: str) -> tuple[str, InlineKeyboardMarkup]:
     shown = found[:MAX_SEARCH_RESULTS]
     rows = [
         [InlineKeyboardButton(text=list_button_label(s), callback_data=f"card:{s.id}")]

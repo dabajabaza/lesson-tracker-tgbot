@@ -8,6 +8,7 @@
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from .models import Student
 from .render import list_button_label
 
 PAGE_SIZE = 10
@@ -31,7 +32,9 @@ def _pagination_row(prefix: str, page: int, total_pages: int) -> list[InlineKeyb
     return row
 
 
-def main_menu_kb(students, sort: str, page: int, total_pages: int) -> InlineKeyboardMarkup:
+def main_menu_kb(
+    students: list[Student], sort: str, page: int, total_pages: int
+) -> InlineKeyboardMarkup:
     rows = [[_btn(list_button_label(s), f"card:{s.id}")] for s in students]
     pagination = _pagination_row(f"list:{sort}", page, total_pages)
     if pagination:
