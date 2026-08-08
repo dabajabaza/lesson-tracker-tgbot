@@ -36,7 +36,7 @@ from aiogram.fsm.storage.base import BaseStorage
 from aiogram.types import Message, TelegramObject, Update
 from dishka import AsyncContainer
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from . import access
 from .models import OutboxMessage, ProcessedUpdate, now_ts
@@ -54,6 +54,60 @@ _PRUNE_EVERY = 3600
 # Живёт в общем словаре, потому что обе стороны — inner-middleware одного
 # обсервера dp.update и получают буквально один и тот же объект.
 ACCESS_DENIED = "access_denied"
+
+
+class AccessGateMiddleware(BaseMiddleware):
+    """Отсекает чужие апдейты ДО замка и до всякой транзакции.
+
+    Проверка доступа жила внутри единицы работы, и это значило: каждый
+    спам-месседж брал общий замок, открывал BEGIN IMMEDIATE (SELECT в
+    is_allowed автобегинит транзакцию, а она у нас IMMEDIATE) и коммитил.
+    Флаг ACCESS_DENIED прошлого раунда экономил только строку отметки — замок
+    и транзакция оставались. Бот находится в поиске Telegram по имени (L10),
+    поток чужих апдейтов штатен, и «✅ Оплата внесена» преподавателя стояла в
+    очереди за спамом.
+
+    Здесь тот же вопрос задаётся READONLY-соединением вне замка: отказ стоит
+    один DEFERRED-SELECT и ничего больше. Редкий путь — посторонний с
+    инвайт-кодом — пропускается внутрь: погашение должно остаться атомарным с
+    обработкой апдейта, им занимается AccessMiddleware в транзакции.
+
+    Регистрировать ПОСЛЕ ContainerMiddleware (нужен движок из контейнера) и
+    ДО DbSessionMiddleware — в этом весь смысл.
+    """
+
+    def __init__(self, admin_ids: frozenset[int]) -> None:
+        self.admin_ids = admin_ids
+        self._denials = _DenialLog()
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = data.get("event_from_user")
+        if user is None:
+            return await handler(event, data)
+
+        container: AsyncContainer = data["dishka_container"]
+        engine = await container.get(AsyncEngine)
+        if await access.is_allowed_readonly(engine, self.admin_ids, user.id):
+            return await handler(event, data)
+
+        if _invite_code_from_start(event) is not None:
+            # Кандидат на погашение инвайта — редкость, ему можно внутрь:
+            # действительность кода проверит AccessMiddleware в транзакции.
+            return await handler(event, data)
+
+        self._denials.log(
+            user.id,
+            "Отказано в доступе: user_id=%s username=%s тип=%s инвайт=False",
+            user.id,
+            user.username,
+            type(event).__name__,
+        )
+        return None
 
 
 class DbSessionMiddleware(BaseMiddleware):
@@ -320,17 +374,19 @@ def _invite_code_from_start(event: TelegramObject) -> str | None:
 
 
 class AccessMiddleware(BaseMiddleware):
-    """Молча отбрасывает апдейты от тех, кому нельзя.
+    """Окончательное решение о доступе — внутри транзакции.
 
-    Единственный вход для постороннего — действующая одноразовая ссылка
-    `/start <код>`. Всем остальным бот не отвечает ничего: сообщение вида
-    «доступ запрещён» подтвердило бы, что бот жив, и приглашало бы долбиться
-    дальше.
+    Штатный поток чужих апдейтов сюда не доходит: их отсекает
+    AccessGateMiddleware до замка. Здесь остаются два дела, которым нужна
+    транзакция: погашение инвайта (атомарно с обработкой апдейта — упал
+    обработчик, инвайт не сгорел) и повторная проверка допуска, закрывающая
+    щель между READONLY-чтением гейта и этим моментом (/deny между ними —
+    микросекунды, но проверка стоит один SELECT по уже открытой сессии).
+
+    Всем недопущенным бот не отвечает ничего: сообщение вида «доступ запрещён»
+    подтвердило бы, что бот жив, и приглашало бы долбиться дальше.
 
     Регистрировать ПОСЛЕ DbSessionMiddleware — берёт готовую сессию из data.
-    Погашение инвайта не коммитится здесь: оно зафиксируется общим коммитом,
-    только если апдейт обработан целиком. Упал обработчик — инвайт не сгорел,
-    человек проходит по ссылке ещё раз.
     """
 
     def __init__(self, admin_ids: frozenset[int]) -> None:

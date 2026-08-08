@@ -15,14 +15,13 @@ SQLite допускает одного писателя. aiogram обрабат�
 import asyncio
 import sqlite3
 
-from aiogram.fsm.storage.base import StorageKey
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from bot.db import READONLY
 from bot.models import FsmRecord
 from bot.services import StudentService
-from tests.bot_harness import make_update_callback
+from tests.bot_harness import make_update_callback, make_update_message
 from tests.reading import balances_by_name
 
 A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS
@@ -140,28 +139,34 @@ async def test_readonly_соединение_не_берёт_блокировк�
         )
 
 
-async def test_хранилище_диспетчера_читает_помеченным_соединением(harness):
-    """Хранилище диспетчера читает raw_state ДО общего замка (см. storage.py).
+async def test_чужой_апдейт_не_открывает_ни_одной_транзакции(harness, container):
+    """Спам не имеет права стоить транзакции — никакой, даже читающей IMMEDIATE.
 
-    Пока его транзакция открывалась как IMMEDIATE, каждый апдейт забирал
-    блокировку записи снаружи всякой сериализации: замок переставал что-либо
-    гарантировать, а под нагрузкой апдейт умирал с «database is locked» там,
-    где нет ни отката, ни отметки идемпотентности.
+    Проверка доступа жила внутри единицы работы: каждый чужой апдейт брал
+    общий замок, SELECT в is_allowed автобегинил BEGIN IMMEDIATE, и всё это
+    коммитилось. Флаг «не отмечать отклонённые» экономил только строку —
+    замок и транзакция оставались, и «Оплата внесена» преподавателя стояла в
+    очереди за спамом. Гейт до замка спрашивает то же самое READONLY-
+    соединением: отказ стоит один DEFERRED-SELECT.
 
-    Проверяется по фактически отправленному SQL, а не по флагу в объекте:
-    пометку легко потерять по дороге, и заметить это должен тест, а не прод.
+    Проверяется по фактически отправленному SQL — и именно на движке
+    КОНТЕЙНЕРА: бот работает через него, а не через движок тестовых фикстур.
+    Слушатель на фикстурном движке молчал бы при любом поведении бота.
     """
-    engine = await harness.dp.storage._container.get(AsyncEngine)  # noqa: SLF001
-    seen: list[str] = []
+    engine = await container.get(AsyncEngine)
+    immediate: list[str] = []
 
     @event.listens_for(engine.sync_engine, "before_cursor_execute")
-    def _record(_conn, _cursor, statement, *_args):  # noqa: ANN001, ANN202
-        if statement.startswith("BEGIN"):
-            seen.append(statement)
+    def _record(_conn, _cursor, statement, *_args):  # noqa: ANN202
+        if statement.startswith("BEGIN IMMEDIATE"):
+            immediate.append(statement)
 
     try:
-        await harness.dp.storage.get_state(StorageKey(bot_id=1, chat_id=A, user_id=A))
+        await harness.dp.feed_update(
+            harness.bot, make_update_message("спам", user_id=999, update_id=9800)
+        )
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", _record)
 
-    assert seen == ["BEGIN"], f"ожидался DEFERRED, а ушло: {seen}"
+    assert harness.session.calls == [], "постороннему бот не отвечает"
+    assert immediate == [], "чужой апдейт не должен открывать транзакцию записи"

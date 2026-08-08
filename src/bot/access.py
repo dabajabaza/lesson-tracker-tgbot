@@ -11,10 +11,11 @@
 
 import secrets
 
-from sqlalchemy import CursorResult, update
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from .db import READONLY
 from .models import AllowedUser, Invite, now_ts
 
 # Длина кода в байтах до base64url: 16 байт ≈ 22 символа — не перебирается и
@@ -28,6 +29,23 @@ async def is_allowed(session: AsyncSession, admin_ids: frozenset[int], user_id: 
     if user_id in admin_ids:
         return True
     return await session.get(AllowedUser, user_id) is not None
+
+
+async def is_allowed_readonly(engine: AsyncEngine, admin_ids: frozenset[int], user_id: int) -> bool:
+    """То же, но БЕЗ транзакции записи и вне области запроса.
+
+    Для гейта, стоящего ДО общего замка (AccessGateMiddleware): бот находится в
+    поиске Telegram по имени, поток чужих апдейтов штатен, и платить за каждый
+    спам-месседж блокировкой записи — значит отдавать чужим ту пропускную
+    способность, ради которой сеть выносили из транзакции. READONLY-соединение
+    открывает DEFERRED и не трогает блокировку записи вовсе (WAL).
+    """
+    if user_id in admin_ids:
+        return True
+    async with engine.connect() as conn:
+        ro = await conn.execution_options(**{READONLY: True})
+        found = await ro.scalar(select(AllowedUser.user_id).where(AllowedUser.user_id == user_id))
+    return found is not None
 
 
 async def allow_user(
