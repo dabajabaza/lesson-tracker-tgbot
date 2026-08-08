@@ -20,9 +20,10 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from bot.db import READONLY
-from bot.models import FsmRecord, Student
+from bot.models import FsmRecord
 from bot.services import StudentService
 from tests.bot_harness import make_update_callback
+from tests.reading import balances_by_name
 
 A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS
 
@@ -46,11 +47,6 @@ def _write_lock_free(db_path) -> bool:
         con.close()
 
 
-async def _balances(sessionmaker) -> dict[str, int]:
-    async with sessionmaker() as s:
-        return {st.name: st.balance for st in await s.scalars(select(Student))}
-
-
 async def test_одновременные_апдейты_разных_владельцев_не_теряются(harness, session, sessionmaker):
     students = StudentService(session)
     a = await students.create(A, "Аня", 160000)
@@ -67,7 +63,7 @@ async def test_одновременные_апдейты_разных_владе
     # замок их не сериализует: владельцы разные.
     await asyncio.gather(charge(A, a.id, 9001), charge(B, b.id, 9002))
 
-    assert await _balances(sessionmaker) == {"Аня": -1, "Боря": -1}
+    assert await balances_by_name(sessionmaker) == {"Аня": -1, "Боря": -1}
 
 
 async def test_пачка_одновременных_апдейтов_одного_владельца(harness, session, sessionmaker):
@@ -87,7 +83,7 @@ async def test_пачка_одновременных_апдейтов_одног
         )
     )
 
-    assert await _balances(sessionmaker) == {"Аня": -5}
+    assert await balances_by_name(sessionmaker) == {"Аня": -5}
 
 
 async def test_во_время_сети_база_свободна_для_записи(harness, session, sessionmaker, db_path):

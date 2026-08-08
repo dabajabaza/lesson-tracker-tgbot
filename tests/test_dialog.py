@@ -9,17 +9,9 @@
 middleware, то же FSM-хранилище, та же схема из миграций.
 """
 
-from sqlalchemy import select
-
-from bot.models import Student
+from tests.reading import student_prices
 
 ADMIN = 1  # совпадает с TEST_ADMIN_IDS в conftest
-
-
-async def _students(sessionmaker) -> list[tuple[str, int]]:
-    async with sessionmaker() as s:
-        rows = await s.scalars(select(Student))
-        return [(st.name, st.price) for st in rows]
 
 
 async def test_добавление_ученика_проходит_весь_диалог(harness, sessionmaker):
@@ -32,7 +24,7 @@ async def test_добавление_ученика_проходит_весь_д�
     await harness.send("Лера", user_id=ADMIN)
     await harness.send("1600", user_id=ADMIN)
 
-    assert await _students(sessionmaker) == [("Лера", 160000)], "цена хранится в копейках"
+    assert await student_prices(sessionmaker) == [("Лера", 160000)], "цена хранится в копейках"
 
     replies = " ".join(harness.session.sent_texts())
     assert "Не получилось выполнить действие" not in replies
@@ -62,7 +54,7 @@ async def test_диалог_переживает_пересборку_диспе
 
     await harness.send("1600", user_id=ADMIN)
 
-    assert await _students(sessionmaker) == [("Лера", 160000)]
+    assert await student_prices(sessionmaker) == [("Лера", 160000)]
 
 
 async def test_посторонний_не_проходит_дальше_доступа(harness, sessionmaker):
@@ -71,4 +63,4 @@ async def test_посторонний_не_проходит_дальше_дос�
     await harness.send("Чужой", user_id=999)
     await harness.send("1600", user_id=999)
 
-    assert await _students(sessionmaker) == []
+    assert await student_prices(sessionmaker) == []

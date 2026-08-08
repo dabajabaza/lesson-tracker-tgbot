@@ -8,24 +8,13 @@
 
 import pytest
 from aiogram.fsm.storage.base import BaseStorage, StorageKey
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import FsmRecord, Student
 from bot.storage import ReadOnlyFsmView, SqlAlchemyStorage
+from tests.reading import fsm_state, student_names
 
 KEY = StorageKey(bot_id=1, chat_id=42, user_id=42)
-
-
-async def _fsm_state(sessionmaker) -> str | None:
-    async with sessionmaker() as s:
-        recs = list(await s.scalars(select(FsmRecord)))
-        return recs[0].state if recs else None
-
-
-async def _student_names(sessionmaker) -> list[str]:
-    async with sessionmaker() as s:
-        return list(await s.scalars(select(Student.name)))
 
 
 async def test_fsm_и_бизнес_запись_фиксируются_одной_транзакцией(container, sessionmaker):
@@ -37,8 +26,8 @@ async def test_fsm_и_бизнес_запись_фиксируются_одно�
         session.add(Student(owner_id=42, name="Лера", name_lower="лера", price=160000))
         await session.commit()  # в бою это делает DbSessionMiddleware
 
-    assert await _fsm_state(sessionmaker) == "Flow:new_price"
-    assert await _student_names(sessionmaker) == ["Лера"]
+    assert await fsm_state(sessionmaker) == "Flow:new_price"
+    assert await student_names(sessionmaker) == ["Лера"]
 
 
 async def test_исключение_откатывает_и_состояние_и_данные(container, sessionmaker):
@@ -55,8 +44,8 @@ async def test_исключение_откатывает_и_состояние_�
             # передаёт его через asend), и тот откатывает всё разом.
             raise RuntimeError("обработчик упал")
 
-    assert await _fsm_state(sessionmaker) is None
-    assert await _student_names(sessionmaker) == []
+    assert await fsm_state(sessionmaker) is None
+    assert await student_names(sessionmaker) == []
 
 
 async def test_хранилище_и_сессия_запроса_делят_одну_транзакцию(container):
@@ -106,10 +95,10 @@ async def test_сбой_отправки_не_отменяет_записанн�
     await harness.send("1600", user_id=1)
     del harness.session.fail_on["SendMessage"]
 
-    assert await _student_names(sessionmaker) == ["Лера"], "коммит уже случился до отправки"
+    assert await student_names(sessionmaker) == ["Лера"], "коммит уже случился до отправки"
 
     # Повтор того же диалога не задваивает ученика: имя занято.
     await harness.click("add", user_id=1)
     await harness.send("Лера", user_id=1)
     await harness.send("1600", user_id=1)
-    assert await _student_names(sessionmaker) == ["Лера"]
+    assert await student_names(sessionmaker) == ["Лера"]
