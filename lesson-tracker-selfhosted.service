@@ -5,6 +5,9 @@
 # Установка (из корня репозитория, после подготовки .venv и токена):
 #   systemctl --user disable --now lesson-tracker-bot
 #   cp lesson-tracker-selfhosted.service ~/.config/systemd/user/
+#   # ОБЯЗАТЕЛЬНО: свой Telegram id в ADMIN_IDS ниже (узнать — у @userinfobot).
+#   # Без него бот молча игнорирует всех, включая владельца, и впустить
+#   # кого-либо изнутри невозможно: /allow и /invite сами админские.
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now lesson-tracker-selfhosted
 # Логи: journalctl --user -u lesson-tracker-selfhosted -f
@@ -29,6 +32,8 @@ WorkingDirectory=%h/Projects/lesson-tracker-tgbot
 ExecStart=%h/Projects/lesson-tracker-tgbot/.venv/bin/python -m bot
 # Прямой доступ к api.telegram.org в этой сети режется — ходим через прокси.
 Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
+# Без ADMIN_IDS AccessMiddleware отбрасывает вообще всё, включая владельца.
+Environment=ADMIN_IDS=
 # Restart=always покрывает и штатный выход, и срабатывание watchdog.
 Restart=always
 RestartSec=15

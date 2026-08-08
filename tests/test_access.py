@@ -152,3 +152,25 @@ async def test_middleware_rejects_bad_deeplink(session):
 async def test_middleware_ignores_plain_start_from_stranger(session):
     """/start без кода — не пропуск: иначе защита не стоила бы ничего."""
     assert await _pass_through(session, STRANGER, "/start") is False
+
+
+async def test_инвайт_ссылка_работает_через_настоящий_диспетчер(harness, sessionmaker):
+    """Deep-link `/start <код>` — единственный самостоятельный вход для
+    приглашённого, и проверять его надо целым апдейтом.
+
+    Разбор кода умел только Message, а AccessMiddleware висит на dp.update и
+    получает Update: код никогда не находился, и приглашённый молча
+    игнорировался навсегда. Прежний тест этого не видел, потому что звал
+    middleware голым Message в обход диспетчера.
+    """
+    async with sessionmaker() as s:
+        invite = await access.create_invite(s, 1)
+        code = invite.code
+        await s.commit()
+
+    outsider = 999
+    await harness.send(f"/start {code}", user_id=outsider)
+
+    async with sessionmaker() as s:
+        assert await access.is_allowed(s, ADMIN, outsider), "инвайт обязан впустить"
+    assert harness.session.sent_texts(), "впущенному бот обязан ответить"

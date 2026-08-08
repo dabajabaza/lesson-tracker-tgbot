@@ -5,10 +5,13 @@
 правило — middleware; и то, и другое ломается молча. Поэтому пинним тестами.
 """
 
+import asyncio
+
 from sqlalchemy import select
 
-from bot.models import Student
+from bot.models import FsmRecord, Student
 from bot.services import StudentService
+from tests.bot_harness import make_update_message
 
 ADMIN = 1
 
@@ -80,3 +83,56 @@ async def test_подделанный_id_не_роняет_обработчик(
     for data in ("card:abc", "charge:", "pay:xx", "hist:zz", "price:!"):
         await harness.click(data, user_id=ADMIN)
         assert "устарел" in _last_answer(harness).lower(), f"на {data} ждём «Кнопка устарела»"
+
+
+async def test_два_быстрых_ответа_не_возвращают_диалог_назад(harness, sessionmaker):
+    """StateFilter обязан смотреть на состояние внутри замка, а не на снимок
+    до него.
+
+    Снимок raw_state берёт FSMContextMiddleware aiogram ещё до того, как
+    апдейт войдёт в общий замок. Два быстрых сообщения на шаге «введите
+    стоимость» получали один и тот же снимок; второе выигрывало фильтр
+    Flow.new_price уже после того, как первое создало ученика и очистило
+    состояние, не находило имени и уводило диалог обратно на «Введите имя
+    ученика». Преподаватель только что успешно добавил ученика — и снова
+    видит вопрос про имя, а следующее его сообщение молча уходит в имя.
+    """
+    await harness.click("add", user_id=ADMIN)
+    await harness.send("Лера", user_id=ADMIN)
+
+    await asyncio.gather(
+        harness.dp.feed_update(
+            harness.bot, make_update_message("1600", user_id=ADMIN, update_id=7101)
+        ),
+        harness.dp.feed_update(
+            harness.bot, make_update_message("1600", user_id=ADMIN, update_id=7102)
+        ),
+    )
+
+    async with sessionmaker() as s:
+        names = list(await s.scalars(select(Student.name)))
+        states = [r.state for r in await s.scalars(select(FsmRecord))]
+
+    assert names == ["Лера"], "ученик должен быть создан ровно один раз"
+    assert states in ([None], []), f"диалог не должен остаться открытым: {states}"
+
+
+async def test_админская_команда_прерывает_начатый_ввод(harness, session, sessionmaker):
+    """Роутер админки подключён раньше основного и забирает апдейт целиком,
+    поэтому сбросить диалог обязан он сам — как это делают /start и /menu.
+
+    Иначе: преподаватель нажал «Внести оплату», вместо суммы набрал /access —
+    и следующее же число, отправленное по любому поводу, молча ушло бы в
+    оплату этому ученику.
+    """
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    await harness.click(f"pay:{a.id}", user_id=ADMIN)
+    await harness.send("/access", user_id=ADMIN)
+    await harness.send("500", user_id=ADMIN)
+
+    async with sessionmaker() as s:
+        fresh = await StudentService(s).get(ADMIN, a.id)
+    assert fresh.balance == 0, "число после админской команды не должно стать оплатой"
