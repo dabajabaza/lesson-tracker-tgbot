@@ -50,6 +50,11 @@ log = logging.getLogger(__name__)
 _MARK_TTL = 7 * 24 * 3600
 _PRUNE_EVERY = 3600
 
+# Ключ в data: апдейт отброшен контролем доступа и обработчика не видел.
+# Живёт в общем словаре, потому что обе стороны — inner-middleware одного
+# обсервера dp.update и получают буквально один и тот же объект.
+ACCESS_DENIED = "access_denied"
+
 
 class DbSessionMiddleware(BaseMiddleware):
     """Сессия из REQUEST-скоупа dishka + замок + коммит + идемпотентность.
@@ -83,11 +88,6 @@ class DbSessionMiddleware(BaseMiddleware):
             if seen is not None:
                 log.warning("Апдейт %s уже применён — повтор отброшен", update_id)
                 return None
-            # Только add: отдельный коммит отметил бы апдейт обработанным ДО
-            # того, как случилось изменение, и смерть процесса в этот промежуток
-            # превратила бы риск дубля в риск потери. Строку зафиксирует общий
-            # коммит ниже — вместе с бизнес-изменением, одной транзакцией.
-            session.add(ProcessedUpdate(update_id=update_id))
 
         try:
             result = await handler(event, data)
@@ -99,6 +99,24 @@ class DbSessionMiddleware(BaseMiddleware):
             await session.rollback()
             ui.discard()
             raise
+
+        # Отметка ставится ПОСЛЕ обработчика — и только если апдейт вообще был
+        # обработан. Проверка на повтор осталась до него: пропустить дубль
+        # нельзя, а вот отмечать нечего, если ничего не случилось.
+        #
+        # Апдейт постороннего до обработчика не доходит (AccessMiddleware), и
+        # отмечать его — значит писать строку и жечь блокировку записи на
+        # каждое спам-сообщение. Бот находится в поиске Telegram по имени
+        # (L10), так что поток чужих апдейтов — штатное явление, а не авария:
+        # платить за него записью в базу незачем, тем более что от следующего
+        # спам-сообщения с новым update_id отметка всё равно не спасает.
+        #
+        # Ставится add, а не отдельный коммит: коммит отметил бы апдейт
+        # обработанным ДО фиксации изменения, и смерть процесса в этот
+        # промежуток превратила бы риск дубля в риск потери. Строку фиксирует
+        # общий коммит ниже — вместе с бизнес-изменением, одной транзакцией.
+        if update_id is not None and not data.get(ACCESS_DENIED):
+            session.add(ProcessedUpdate(update_id=update_id))
         # Обещания доставки ложатся в ту же транзакцию, что и операция.
         await ui.persist(session)
         await session.commit()
@@ -320,6 +338,10 @@ class AccessMiddleware(BaseMiddleware):
                 type(event).__name__,
                 invite_attempted,
             )
+            # Сообщаем единице работы, что отмечать нечего: обработчик апдейт
+            # не видел, и строка в processed_updates была бы платой за чужой
+            # спам — записью в базу и блокировкой записи на каждое сообщение.
+            data[ACCESS_DENIED] = True
             return None
 
         return await handler(event, data)
