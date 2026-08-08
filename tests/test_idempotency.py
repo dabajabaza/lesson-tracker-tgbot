@@ -13,23 +13,12 @@ Telegram подтверждает апдейт только следующим �
 
 from unittest.mock import patch
 
-from sqlalchemy import select
-
-from bot.models import ProcessedUpdate, Student
+from bot.models import ProcessedUpdate
 from bot.services import StudentService
 from tests.bot_harness import make_update_message
+from tests.reading import processed_update_ids, student_prices
 
 ADMIN = 1
-
-
-async def _students(sessionmaker) -> list[tuple[str, int]]:
-    async with sessionmaker() as s:
-        return [(st.name, st.price) for st in await s.scalars(select(Student))]
-
-
-async def _marks(sessionmaker) -> list[int]:
-    async with sessionmaker() as s:
-        return sorted(await s.scalars(select(ProcessedUpdate.update_id)))
 
 
 async def test_повтор_апдейта_не_создаёт_второго_ученика(harness, sessionmaker):
@@ -41,8 +30,8 @@ async def test_повтор_апдейта_не_создаёт_второго_у
     # Ровно это Telegram присылает, если процесс умер до подтверждения offset.
     await harness.dp.feed_update(harness.bot, update)
 
-    assert await _students(sessionmaker) == [("Лера", 160000)], "ученик не должен задвоиться"
-    assert 777 in await _marks(sessionmaker)
+    assert await student_prices(sessionmaker) == [("Лера", 160000)], "ученик не должен задвоиться"
+    assert 777 in await processed_update_ids(sessionmaker)
 
 
 async def test_разные_апдейты_обрабатываются_оба(harness, sessionmaker):
@@ -58,8 +47,8 @@ async def test_разные_апдейты_обрабатываются_оба(h
         harness.bot, make_update_message("1800", user_id=ADMIN, update_id=802)
     )
 
-    assert await _students(sessionmaker) == [("Лера", 160000), ("Женя", 180000)]
-    marks = await _marks(sessionmaker)
+    assert await student_prices(sessionmaker) == [("Лера", 160000), ("Женя", 180000)]
+    marks = await processed_update_ids(sessionmaker)
     assert 801 in marks and 802 in marks
 
 
@@ -93,12 +82,14 @@ async def test_упавший_обработчик_не_отмечается_и_
     with patch.object(StudentService, "create", side_effect=RuntimeError("диск отвалился")):
         await harness.dp.feed_update(harness.bot, update)
 
-    assert await _students(sessionmaker) == []
-    assert 555 not in await _marks(sessionmaker), "неприменённый апдейт отмечать нельзя"
+    assert await student_prices(sessionmaker) == []
+    assert 555 not in await processed_update_ids(sessionmaker), (
+        "неприменённый апдейт отмечать нельзя"
+    )
 
     # И повторная доставка того же апдейта проходит нормально.
     await harness.dp.feed_update(harness.bot, update)
-    assert await _students(sessionmaker) == [("Лера", 160000)]
+    assert await student_prices(sessionmaker) == [("Лера", 160000)]
 
 
 async def test_старые_отметки_вычищаются(harness, sessionmaker, monkeypatch):
@@ -113,6 +104,6 @@ async def test_старые_отметки_вычищаются(harness, session
     monkeypatch.setattr(mw, "_PRUNE_EVERY", 0)  # чистка на ближайшем апдейте
     await harness.send("привет", user_id=ADMIN)
 
-    marks = await _marks(sessionmaker)
+    marks = await processed_update_ids(sessionmaker)
     assert 1 not in marks, "просроченная отметка должна быть удалена"
     assert marks, "свежая отметка текущего апдейта должна остаться"

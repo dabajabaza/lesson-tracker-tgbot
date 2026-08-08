@@ -1,13 +1,7 @@
 """Тесты контроля доступа: белый список, админы, одноразовые приглашения.
 Фикстура session — в conftest.py (настоящий SQLite in-memory)."""
 
-from datetime import datetime
-
-from aiogram.types import Chat, Message
-from aiogram.types import User as TgUser
-
 from bot import access
-from bot.middlewares import AccessMiddleware
 from bot.models import AllowedUser, Invite, now_ts
 
 ADMIN = frozenset({111})
@@ -94,83 +88,71 @@ async def test_invite_codes_are_unique(session):
 
 
 # ---------- middleware: собственно отсечение спама ----------
+#
+# Всё, что ниже, идёт через настоящий диспетчер. Раньше здесь звали
+# AccessMiddleware напрямую, подсовывая ему голый Message и словарь data,
+# собранный руками. Тесты были зелёными, пока в проде не работал единственный
+# самостоятельный вход для приглашённого: middleware висит на dp.update и
+# получает Update, а разбор кода умел только Message. Проверка в вакууме не
+# видит того, что стоит между ней и продом.
 
 
-def _message(uid: int, text: str) -> Message:
-    """Настоящий aiogram-Message: middleware проверяет тип через isinstance,
-    поэтому SimpleNamespace тут не подошёл бы."""
-    return Message(
-        message_id=1,
-        date=datetime(2026, 1, 1),
-        chat=Chat(id=uid, type="private"),
-        from_user=TgUser(id=uid, is_bot=False, first_name="T"),
-        text=text,
-    )
+async def _reaches_handler(harness, uid: int, text: str = "привет") -> bool:
+    """Дошёл ли апдейт до обработчика — по тому, ответил ли бот.
 
-
-async def _pass_through(session, uid: int, text: str = "привет"):
-    """Прогоняет апдейт через AccessMiddleware. True — обработчик был вызван."""
-    called = False
-
-    async def handler(event, data):
-        nonlocal called
-        called = True
-
-    event = _message(uid, text)
-    mw = AccessMiddleware(ADMIN)
-    await mw(handler, event, {"event_from_user": event.from_user, "session": session})
-    return called
-
-
-async def test_middleware_drops_stranger(session):
-    assert await _pass_through(session, STRANGER) is False
-
-
-async def test_middleware_lets_admin_through(session):
-    assert await _pass_through(session, 111) is True
-
-
-async def test_middleware_lets_allowed_user_through(session):
-    await access.allow_user(session, STRANGER, "vasya")
-    assert await _pass_through(session, STRANGER) is True
-
-
-async def test_middleware_redeems_valid_deeplink(session):
-    invite = await access.create_invite(session, created_by=111)
-    await session.commit()
-
-    assert await _pass_through(session, INVITEE, f"/start {invite.code}") is True
-    # и доступ остаётся на будущее, уже без ссылки
-    assert await _pass_through(session, INVITEE) is True
-
-
-async def test_middleware_rejects_bad_deeplink(session):
-    assert await _pass_through(session, STRANGER, "/start bogus") is False
-    assert await access.is_allowed(session, ADMIN, STRANGER) is False
-
-
-async def test_middleware_ignores_plain_start_from_stranger(session):
-    """/start без кода — не пропуск: иначе защита не стоила бы ничего."""
-    assert await _pass_through(session, STRANGER, "/start") is False
-
-
-async def test_инвайт_ссылка_работает_через_настоящий_диспетчер(harness, sessionmaker):
-    """Deep-link `/start <код>` — единственный самостоятельный вход для
-    приглашённого, и проверять его надо целым апдейтом.
-
-    Разбор кода умел только Message, а AccessMiddleware висит на dp.update и
-    получает Update: код никогда не находился, и приглашённый молча
-    игнорировался навсегда. Прежний тест этого не видел, потому что звал
-    middleware голым Message в обход диспетчера.
+    Молчание и есть отказ: AccessMiddleware не отвечает чужим ничего, чтобы не
+    подтверждать, что бот жив (см. L10).
     """
+    harness.session.clear()
+    await harness.send(text, user_id=uid)
+    return bool(harness.session.calls)
+
+
+async def test_middleware_drops_stranger(harness):
+    assert await _reaches_handler(harness, STRANGER) is False
+
+
+async def test_middleware_lets_admin_through(harness):
+    assert await _reaches_handler(harness, 111) is True
+
+
+async def test_middleware_lets_allowed_user_through(harness, sessionmaker):
     async with sessionmaker() as s:
-        invite = await access.create_invite(s, 1)
+        await access.allow_user(s, STRANGER, "vasya")
+        await s.commit()
+
+    assert await _reaches_handler(harness, STRANGER) is True
+
+
+async def test_middleware_redeems_valid_deeplink(harness, sessionmaker):
+    async with sessionmaker() as s:
+        invite = await access.create_invite(s, created_by=111)
         code = invite.code
         await s.commit()
 
-    outsider = 999
-    await harness.send(f"/start {code}", user_id=outsider)
+    assert await _reaches_handler(harness, INVITEE, f"/start {code}") is True
+    # и доступ остаётся на будущее, уже без ссылки
+    assert await _reaches_handler(harness, INVITEE) is True
 
+
+async def test_middleware_rejects_bad_deeplink(harness, sessionmaker):
+    assert await _reaches_handler(harness, STRANGER, "/start bogus") is False
     async with sessionmaker() as s:
-        assert await access.is_allowed(s, ADMIN, outsider), "инвайт обязан впустить"
-    assert harness.session.sent_texts(), "впущенному бот обязан ответить"
+        assert await access.is_allowed(s, ADMIN, STRANGER) is False
+
+
+async def test_middleware_ignores_plain_start_from_stranger(harness):
+    """/start без кода — не пропуск: иначе защита не стоила бы ничего."""
+    assert await _reaches_handler(harness, STRANGER, "/start") is False
+
+
+async def test_погашенный_инвайт_второй_раз_не_срабатывает(harness, sessionmaker):
+    """Одноразовость держится атомарным UPDATE, а не проверкой в коде — но
+    убедиться в этом стоит на живом пути, а не только на сервисе."""
+    async with sessionmaker() as s:
+        invite = await access.create_invite(s, created_by=111)
+        code = invite.code
+        await s.commit()
+
+    assert await _reaches_handler(harness, INVITEE, f"/start {code}") is True
+    assert await _reaches_handler(harness, 777, f"/start {code}") is False

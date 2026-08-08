@@ -12,19 +12,9 @@ from sqlalchemy import select
 from bot.models import FsmRecord, Student
 from bot.services import StudentService
 from tests.bot_harness import make_update_message
+from tests.reading import last_callback_answer, student_names
 
 ADMIN = 1
-
-
-def _last_answer(harness) -> str:
-    answers = harness.session.calls_of("AnswerCallbackQuery")
-    assert answers, "на колбэк обязан быть ответ, иначе кнопка «крутится»"
-    return answers[-1].text or ""
-
-
-async def _students(sessionmaker) -> list[str]:
-    async with sessionmaker() as s:
-        return list(await s.scalars(select(Student.name)))
 
 
 async def test_start_прерывает_диалог_а_не_становится_именем(harness, sessionmaker):
@@ -34,10 +24,10 @@ async def test_start_прерывает_диалог_а_не_становитс�
     await harness.click("add", user_id=ADMIN)
     await harness.send("/start", user_id=ADMIN)
 
-    assert await _students(sessionmaker) == []
+    assert await student_names(sessionmaker) == []
     # Диалог сброшен: следующее число уже не воспринимается как цена.
     await harness.send("1600", user_id=ADMIN)
-    assert await _students(sessionmaker) == []
+    assert await student_names(sessionmaker) == []
 
 
 async def test_нажатие_кнопки_сбрасывает_начатый_ввод(harness, session, sessionmaker, students):
@@ -76,13 +66,15 @@ async def test_нераспознанный_колбэк_получает_отв
     """Хвостовой роутер: без него кнопка с незнакомыми данными оставила бы
     вечно крутящийся индикатор."""
     await harness.click("такой_команды_нет", user_id=ADMIN)
-    assert _last_answer(harness) == ""
+    assert last_callback_answer(harness) == ""
 
 
 async def test_подделанный_id_не_роняет_обработчик(harness):
     for data in ("card:abc", "charge:", "pay:xx", "hist:zz", "price:!"):
         await harness.click(data, user_id=ADMIN)
-        assert "устарел" in _last_answer(harness).lower(), f"на {data} ждём «Кнопка устарела»"
+        assert "устарел" in last_callback_answer(harness).lower(), (
+            f"на {data} ждём «Кнопка устарела»"
+        )
 
 
 async def test_два_быстрых_ответа_не_возвращают_диалог_назад(harness, sessionmaker):

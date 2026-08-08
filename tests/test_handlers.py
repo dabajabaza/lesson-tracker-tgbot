@@ -11,37 +11,23 @@ from aiogram.fsm.storage.base import StorageKey
 
 from bot.services import StudentService
 from bot.storage import SqlAlchemyStorage
+from tests.reading import last_callback_answer, last_edit
 
 A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS (см. conftest)
-
-
-def _last_edit(harness) -> str:
-    edits = harness.session.calls_of("EditMessageText")
-    assert edits, "обработчик должен был отредактировать сообщение"
-    return edits[-1].text
-
-
-def _last_answer(harness) -> str:
-    answers = harness.session.calls_of("AnswerCallbackQuery")
-    assert answers, "обработчик должен был ответить на колбэк"
-    return answers[-1].text or ""
-
-
-# ---------- межтенантная изоляция ----------
 
 
 async def test_foreign_card_not_visible(harness, session, students):
     a = await students.create(A, "Аня", 160000)
     await session.commit()  # repo не коммитит: подготовка фиксирует сама
     await harness.click(f"card:{a.id}", user_id=B)
-    assert "не найден" in _last_edit(harness).lower()
+    assert "не найден" in last_edit(harness).lower()
 
 
 async def test_foreign_charge_rejected(harness, session, students):
     a = await students.create(A, "Аня", 160000)
     await session.commit()
     await harness.click(f"charge:{a.id}", user_id=B)
-    assert "не найден" in _last_answer(harness).lower()
+    assert "не найден" in last_callback_answer(harness).lower()
     fresh = await students.get(A, a.id)
     assert fresh.balance == 0  # чужое списание не применилось
 
@@ -50,7 +36,7 @@ async def test_foreign_payment_rejected(harness, session, students):
     a = await students.create(A, "Аня", 160000)
     await session.commit()
     await harness.click(f"pay:{a.id}", user_id=B)
-    assert "не найден" in _last_answer(harness).lower()
+    assert "не найден" in last_callback_answer(harness).lower()
 
 
 async def test_foreign_undo_sees_nothing(harness, session, students, payments):
@@ -58,7 +44,7 @@ async def test_foreign_undo_sees_nothing(harness, session, students, payments):
     await payments.apply(A, a.id, 160000)
     await session.commit()
     await harness.click("undo", user_id=B)
-    assert "отменять нечего" in _last_answer(harness).lower()
+    assert "отменять нечего" in last_callback_answer(harness).lower()
 
 
 # ---------- владелец: действие проходит ----------
@@ -83,7 +69,7 @@ async def test_owner_charge_applies(harness, session, sessionmaker, students):
 async def test_malformed_callback_data(harness):
     for data in ("card:abc", "charge:", "pay:xx"):
         await harness.click(data, user_id=A)
-        assert "устарел" in _last_answer(harness).lower()
+        assert "устарел" in last_callback_answer(harness).lower()
 
 
 # ---------- сохранение сортировки при возврате к списку ----------
@@ -96,7 +82,7 @@ async def test_sort_preserved_on_home(harness, session, students, payments):
     await session.commit()
     await harness.click("list:due:0", user_id=A)  # выбрали «скоро оплата»
     await harness.click("home", user_id=A)  # вернулись к списку
-    assert "скоро оплата" in _last_edit(harness)
+    assert "скоро оплата" in last_edit(harness)
 
 
 # ---------- персистентность FSM (переживает «рестарт») ----------

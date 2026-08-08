@@ -17,16 +17,12 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from bot import outbox
-from bot.models import OutboxMessage, Student, now_ts
+from bot.models import OutboxMessage, now_ts
 from bot.services import StudentService
 from tests.bot_harness import make_update_callback
+from tests.reading import queued_messages, student_balances
 
 ADMIN = 1
-
-
-async def _queued(sessionmaker) -> list[OutboxMessage]:
-    async with sessionmaker() as s:
-        return list(await s.scalars(select(OutboxMessage).order_by(OutboxMessage.id)))
 
 
 async def _make_due(sessionmaker) -> None:
@@ -42,11 +38,6 @@ async def _make_due(sessionmaker) -> None:
         await s.commit()
 
 
-async def _students(sessionmaker) -> list[tuple[str, int]]:
-    async with sessionmaker() as s:
-        return [(st.name, st.balance) for st in await s.scalars(select(Student))]
-
-
 async def test_удачная_отправка_не_оставляет_следов(harness, sessionmaker):
     """Штатный путь: ответ ушёл сразу, очередь снова пуста. Иначе таблица
     росла бы на каждый апдейт, а фоновый отправщик слал бы дубли."""
@@ -54,8 +45,8 @@ async def test_удачная_отправка_не_оставляет_след�
     await harness.send("Лера", user_id=ADMIN)
     await harness.send("1600", user_id=ADMIN)
 
-    assert await _students(sessionmaker) == [("Лера", 0)]
-    assert await _queued(sessionmaker) == []
+    assert await student_balances(sessionmaker) == [("Лера", 0)]
+    assert await queued_messages(sessionmaker) == []
 
 
 async def test_сбой_отправки_оставляет_обещание_и_оно_дожимается(harness, sessionmaker):
@@ -68,8 +59,8 @@ async def test_сбой_отправки_оставляет_обещание_и_
     await harness.send("1600", user_id=ADMIN)
     del harness.session.fail_on["SendMessage"]
 
-    assert await _students(sessionmaker) == [("Лера", 0)], "операция обязана быть применена"
-    queued = await _queued(sessionmaker)
+    assert await student_balances(sessionmaker) == [("Лера", 0)], "операция обязана быть применена"
+    queued = await queued_messages(sessionmaker)
     assert [row.method for row in queued] == ["SendMessage"]
     assert "Ученик добавлен" in queued[0].payload
 
@@ -79,8 +70,10 @@ async def test_сбой_отправки_оставляет_обещание_и_
 
     assert sent == 1
     assert any("Ученик добавлен" in t for t in harness.session.sent_texts())
-    assert await _queued(sessionmaker) == [], "доставленное обещание должно исчезнуть"
-    assert await _students(sessionmaker) == [("Лера", 0)], "повтор доставки не трогает данные"
+    assert await queued_messages(sessionmaker) == [], "доставленное обещание должно исчезнуть"
+    assert await student_balances(sessionmaker) == [("Лера", 0)], (
+        "повтор доставки не трогает данные"
+    )
 
 
 async def test_повторная_доставка_не_повторяет_операцию(harness, sessionmaker):
@@ -92,10 +85,10 @@ async def test_повторная_доставка_не_повторяет_оп�
     await harness.send("1600", user_id=ADMIN)
     del harness.session.fail_on["SendMessage"]
 
-    assert await _students(sessionmaker) == [("Лера", 0)]
+    assert await student_balances(sessionmaker) == [("Лера", 0)]
     await _make_due(sessionmaker)
     await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
-    assert await _students(sessionmaker) == [("Лера", 0)], "ученик не должен задвоиться"
+    assert await student_balances(sessionmaker) == [("Лера", 0)], "ученик не должен задвоиться"
 
 
 async def test_свежая_строка_не_видна_отправщику(harness, sessionmaker):
@@ -108,9 +101,9 @@ async def test_свежая_строка_не_видна_отправщику(ha
     await harness.send("1600", user_id=ADMIN)
     del harness.session.fail_on["SendMessage"]
 
-    assert len(await _queued(sessionmaker)) == 1, "обещание должно быть записано"
+    assert len(await queued_messages(sessionmaker)) == 1, "обещание должно быть записано"
     assert await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock()) == 0
-    assert len(await _queued(sessionmaker)) == 1, "строка должна дождаться своего срока"
+    assert len(await queued_messages(sessionmaker)) == 1, "строка должна дождаться своего срока"
 
 
 async def test_правка_экрана_не_кладётся_в_очередь(harness, session, sessionmaker):
@@ -130,8 +123,8 @@ async def test_правка_экрана_не_кладётся_в_очередь
     )
     del harness.session.fail_on["EditMessageText"]
 
-    assert await _students(sessionmaker) == [("Аня", -1)], "списание применено"
-    assert await _queued(sessionmaker) == [], "правку повторять нельзя"
+    assert await student_balances(sessionmaker) == [("Аня", -1)], "списание применено"
+    assert await queued_messages(sessionmaker) == [], "правку повторять нельзя"
 
 
 async def test_неудача_дожимки_переносит_попытку(harness, sessionmaker):
@@ -146,7 +139,7 @@ async def test_неудача_дожимки_переносит_попытку(h
     sent = await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
 
     assert sent == 0
-    queued = await _queued(sessionmaker)
+    queued = await queued_messages(sessionmaker)
     assert len(queued) == 1
     assert queued[0].attempts == 1
     assert queued[0].next_attempt_at > queued[0].created_at, "повтор обязан быть отложен"
@@ -161,8 +154,8 @@ async def test_откат_не_оставляет_обещания(harness, sess
     with patch.object(StudentService, "create", side_effect=RuntimeError("диск отвалился")):
         await harness.send("1600", user_id=ADMIN)
 
-    assert await _students(sessionmaker) == []
-    assert await _queued(sessionmaker) == []
+    assert await student_balances(sessionmaker) == []
+    assert await queued_messages(sessionmaker) == []
 
 
 async def test_просроченное_обещание_выбрасывается(harness, sessionmaker):
@@ -180,7 +173,7 @@ async def test_просроченное_обещание_выбрасывает�
         await s.commit()
 
     await outbox.purge_expired(sessionmaker, asyncio.Lock())
-    assert await _queued(sessionmaker) == []
+    assert await queued_messages(sessionmaker) == []
 
 
 async def test_нечитаемое_обещание_не_застревает(harness, sessionmaker):
@@ -199,7 +192,7 @@ async def test_нечитаемое_обещание_не_застревает(h
 
     await _make_due(sessionmaker)
     await outbox.deliver_batch(harness.bot, sessionmaker, asyncio.Lock())
-    assert await _queued(sessionmaker) == []
+    assert await queued_messages(sessionmaker) == []
 
 
 async def test_провал_выгрузки_не_выдаётся_за_успех(harness, session):
@@ -237,7 +230,7 @@ async def test_сбой_уборки_не_превращает_успех_в_о�
     await harness.send("Лера", user_id=ADMIN)
     await harness.send("1600", user_id=ADMIN)
 
-    assert await _students(sessionmaker) == [("Лера", 0)], "операция обязана быть применена"
+    assert await student_balances(sessionmaker) == [("Лера", 0)], "операция обязана быть применена"
     texts = harness.session.sent_texts()
     assert any("Ученик добавлен" in t for t in texts)
     assert not any("Не получилось" in t for t in texts), "уборка не должна пугать пользователя"
