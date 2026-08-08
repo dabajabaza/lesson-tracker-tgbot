@@ -17,10 +17,10 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from bot import outbox
-from bot.models import OutboxMessage, now_ts
+from bot.models import FsmRecord, OutboxMessage, now_ts
 from bot.services import StudentService
 from tests.bot_harness import make_update_callback
-from tests.reading import queued_messages, student_balances
+from tests.reading import fsm_state, queued_messages, student_balances
 
 ADMIN = 1
 
@@ -331,3 +331,95 @@ async def test_подсказка_диалога_не_попадает_в_оче
     del harness.session.fail_on["EditMessageText"], harness.session.fail_on["SendMessage"]
 
     assert await queued_messages(sessionmaker) == [], "подсказку повторять нельзя"
+
+
+async def test_сорванная_reply_подсказка_закрывает_диалог(harness, session, sessionmaker):
+    """Невидимый диалог на reply-пути: состояние Flow.new_price коммитится, а
+    подсказка «Теперь введите стоимость» — обычная отправка без запасного
+    варианта. Не ушла — человек не видит ничего, решает что нажатие не прошло,
+    и следующее число, набранное по любому поводу, становилось ценой урока и
+    создавало ученика. Теперь недоставленная подсказка закрывает диалог.
+    """
+    await harness.click("add", user_id=ADMIN)
+    harness.session.fail_on["SendMessage"] = RuntimeError("сеть упала")
+    await harness.send("Лера", user_id=ADMIN)  # подсказка о цене не уходит
+    del harness.session.fail_on["SendMessage"]
+
+    assert await fsm_state(sessionmaker) is None, "невидимый диалог должен быть закрыт"
+
+    await harness.send("1600", user_id=ADMIN)  # «цена» из другого разговора
+    assert await student_balances(sessionmaker) == [], "число не должно стать ценой урока"
+
+
+async def test_fallback_правки_переписывает_prompt_id(harness, session, sessionmaker):
+    """Правка-подсказка ушла запасным СООБЩЕНИЕМ — у подсказки новый id.
+
+    Без переписывания prompt_id следующий шаг диалога удалял бы карточку под
+    кнопкой (старый id), а осиротевшая подсказка оставалась висеть.
+    """
+    students = StudentService(session)
+    a = await students.create(ADMIN, "Аня", 160000)
+    await session.commit()
+
+    harness.session.fail_on["EditMessageText"] = RuntimeError("сообщение старое")
+    await harness.click(f"pay:{a.id}", user_id=ADMIN, message_id=9000)
+    del harness.session.fail_on["EditMessageText"]
+
+    fallback_ids = harness.session.sent_message_ids("Введите сумму оплаты")
+    assert fallback_ids, "подсказка обязана уйти запасным сообщением"
+
+    harness.session.clear()
+    await harness.send("1600", user_id=ADMIN)
+
+    deleted = [m.message_id for m in harness.session.calls_of("DeleteMessage")]
+    assert deleted == fallback_ids, (
+        f"удалить надо подсказку {fallback_ids}, а не карточку: удалено {deleted}"
+    )
+    assert await student_balances(sessionmaker) == [("Аня", 1)], "оплата должна пройти"
+
+
+async def test_поздний_prompt_id_не_воскрешает_закрытый_диалог(harness, sessionmaker):
+    """prompt_id пишется после круга сети, и быстрый следующий апдейт успевает
+    завершить диалог раньше. Дописать id в закрытый диалог значило бы
+    воскресить пустую строку мусором {"prompt_id": …} — и она жила бы вечно.
+    """
+    import bot.middlewares as mw
+
+    original = mw.DbSessionMiddleware._settle
+    settles: list = []
+
+    async def delayed_settle(self, container, ui):
+        # Придерживаем ХВОСТ апдейта «Лера»: его prompt_id-запись выполнится
+        # уже после того, как следующее сообщение завершит диалог.
+        settles.append((self, container, ui))
+
+    mw.DbSessionMiddleware._settle = delayed_settle  # type: ignore[method-assign]
+    try:
+        await harness.click("add", user_id=ADMIN)
+        await harness.send("Лера", user_id=ADMIN)  # ставит Flow.new_price + prompt
+    finally:
+        mw.DbSessionMiddleware._settle = original  # type: ignore[method-assign]
+
+    await harness.send("1600", user_id=ADMIN)  # завершает диалог, clear()
+
+    for self_, container, ui in settles:
+        await original(self_, container, ui)  # опоздавшие хвосты доезжают
+
+    assert await fsm_state(sessionmaker) is None, "закрытый диалог не должен воскреснуть"
+    async with sessionmaker() as s:
+        fsm_rows = list(await s.scalars(select(FsmRecord)))
+    assert fsm_rows == [], f"мусорная строка FSM: {[(r.key, r.state, r.data) for r in fsm_rows]}"
+
+
+async def test_clear_удаляет_строку_fsm(harness, sessionmaker):
+    """clear() раньше только обнулял поля: каждый открывавший диалог носил
+    пустую строку вечно, и её читали на каждом апдейте оба хранилища."""
+    await harness.click("add", user_id=ADMIN)  # открыли диалог — строка есть
+    async with sessionmaker() as s:
+        assert list(await s.scalars(select(FsmRecord))) != []
+
+    await harness.send("/start", user_id=ADMIN)  # /start прерывает диалог
+
+    async with sessionmaker() as s:
+        rows = list(await s.scalars(select(FsmRecord)))
+    assert rows == [], f"после clear() строка должна исчезнуть: {[(r.key, r.state) for r in rows]}"

@@ -30,6 +30,10 @@ class RecordingSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[TelegramMethod[Any]] = []
+        # Ответы на успешные вызовы, парой к методу: реконструировать id по
+        # порядку вызовов нельзя — упавшие вызовы попадают в calls, но ответа
+        # (и id) не получают.
+        self.responses: list[tuple[TelegramMethod[Any], Any]] = []
         self.fail_on: dict[str, Exception] = {}
         self._next_message_id = 5000
 
@@ -50,12 +54,14 @@ class RecordingSession(BaseSession):
         if name in self.fail_on:
             raise self.fail_on[name]
 
+        result: Any = True
         if isinstance(method, SendMessage | EditMessageText):
             assert isinstance(method.chat_id, int)
-            return self._next_message(method.chat_id, method.text)
-        if isinstance(method, GetMe):
-            return TgUser(id=1, is_bot=True, first_name="Bot", username="testbot")
-        return True
+            result = self._next_message(method.chat_id, method.text)
+        elif isinstance(method, GetMe):
+            result = TgUser(id=1, is_bot=True, first_name="Bot", username="testbot")
+        self.responses.append((method, result))
+        return result
 
     async def stream_content(
         self,
@@ -82,8 +88,17 @@ class RecordingSession(BaseSession):
         """
         return [text for m in self.calls if (text := getattr(m, "text", None)) is not None]
 
+    def sent_message_ids(self, containing: str) -> list[int]:
+        """id сообщений, реально отправленных SendMessage с данным текстом."""
+        return [
+            resp.message_id
+            for method, resp in self.responses
+            if isinstance(method, SendMessage) and containing in (method.text or "")
+        ]
+
     def clear(self) -> None:
         self.calls.clear()
+        self.responses.clear()
 
 
 def make_update_message(

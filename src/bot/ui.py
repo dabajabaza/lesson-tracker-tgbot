@@ -111,6 +111,11 @@ class Responder:
         self._delivered: list[int] = []
         # Заполняется сливом, читается middleware: (ключ FSM, id подсказки).
         self.prompt_updates: list[tuple[StorageKey, int]] = []
+        # Диалоги, чью подсказку не удалось показать ВООБЩЕ (ни правкой, ни
+        # запасным сообщением). Middleware закрывает их: состояние уже
+        # закоммичено, и без подсказки оно — невидимый диалог, в который
+        # молча уйдёт следующее сообщение человека.
+        self.failed_prompts: list[StorageKey] = []
 
     def _message(
         self, chat_id: int, text: str, reply_markup: Any, parse_mode: str | None
@@ -176,7 +181,13 @@ class Responder:
         )
 
     def edit(
-        self, message: Message, text: str, reply_markup: Any = None, *, durable: bool = False
+        self,
+        message: Message,
+        text: str,
+        reply_markup: Any = None,
+        *,
+        durable: bool = False,
+        prompt_for: StorageKey | None = None,
     ) -> None:
         """Правка сообщения, терпимая к повторному нажатию той же кнопки.
 
@@ -196,6 +207,14 @@ class Responder:
         (списание, возврат, отмена). Тогда запасное сообщение ещё и попадает в
         очередь: правку нельзя воспроизвести позже, не отбросив человека на
         покинутый экран, а сообщение — можно.
+
+        prompt_for — когда правка открывает диалог (её текст и есть подсказка).
+        Успешная правка id не меняет, и prompt_id уже записан обработчиком в
+        транзакции; но если правку доставило запасное СООБЩЕНИЕ, у подсказки
+        новый id — без переписывания следующий шаг удалял бы не подсказку, а
+        карточку под кнопкой, и она исчезала бы из чата. А если не ушло ни то
+        ни другое, диалог закрывается (см. failed_prompts): невидимым он
+        существовать не должен.
         """
         fallback = self._message(message.chat.id, text, reply_markup, None)
         self._queue.append(
@@ -209,6 +228,7 @@ class Responder:
                 on_error="not_modified",
                 durable=durable,
                 fallback=fallback,
+                prompt_for=prompt_for,
             )
         )
 
@@ -357,18 +377,32 @@ class Responder:
         """
         queued, self._queue = self._queue, []
         for item in queued:
-            result = await self._deliver(bot, item)
+            result, used_fallback = await self._deliver(bot, item)
             if result is _FAILED:
+                if item.prompt_for is not None:
+                    self.failed_prompts.append(item.prompt_for)
                 continue
             if item.outbox_id is not None:
                 self._delivered.append(item.outbox_id)
-            if item.prompt_for is not None and isinstance(result, Message):
+            # prompt_id дописывается только когда отправлено НОВОЕ сообщение:
+            # у reply это первичный успех, у правки — только запасной путь.
+            # Успешная правка не меняет message_id, и обработчик уже записал
+            # его синхронно, в транзакции — без гонки со следующим апдейтом.
+            if (
+                item.prompt_for is not None
+                and isinstance(result, Message)
+                and (used_fallback or not isinstance(item.method, EditMessageText))
+            ):
                 self.prompt_updates.append((item.prompt_for, result.message_id))
 
-    async def _deliver(self, bot: Bot, item: _Pending) -> Any:
-        """Отправить намерение, при неудаче — его запасной вариант."""
+    async def _deliver(self, bot: Bot, item: _Pending) -> tuple[Any, bool]:
+        """Отправить намерение, при неудаче — его запасной вариант.
+
+        Возвращает (результат, ушло ли запасным сообщением): вызывающему важно
+        различать пути — id нового сообщения меняет prompt_id, id правки нет.
+        """
         try:
-            return await self._send(bot, item)
+            return await self._send(bot, item), False
         except Exception:
             log.warning(
                 "Не удалось отправить %s%s",
@@ -377,16 +411,16 @@ class Responder:
                 exc_info=True,
             )
         if item.fallback is None:
-            return _FAILED
+            return _FAILED, False
         try:
-            return await bot(item.fallback)
+            return await bot(item.fallback), True
         except Exception:
             log.warning(
                 "Запасное сообщение тоже не ушло%s",
                 " — останется в очереди" if item.outbox_id else "",
                 exc_info=True,
             )
-            return _FAILED
+            return _FAILED, True
 
     @staticmethod
     async def _send(bot: Bot, item: _Pending) -> Any:
