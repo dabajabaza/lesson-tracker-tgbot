@@ -1,7 +1,7 @@
 """Буфер исходящих вызовов Telegram.
 
 Обработчики больше не ходят в сеть сами: они складывают намерение отправить, а
-сеть случается позже, когда транзакция уже закрыта (см. middlewares.py). Ради
+сеть случается позже, когда транзакция уже закрыта (см. bot/middlewares/). Ради
 этого шов и заведён — блокировка записи SQLite перестаёт держаться все ~300 мс
 круга до Telegram и обратно, и потолок в единицы апдейтов в секунду исчезает.
 
@@ -16,8 +16,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -28,7 +27,6 @@ from aiogram.methods import (
     EditMessageText,
     SendDocument,
     SendMessage,
-    TelegramMethod,
 )
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,67 +34,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lesson_tracker.db.models import OutboxMessage
 from lesson_tracker.timeutils import now_ts
 
-log = logging.getLogger(__name__)
+from ._outgoing import FAILED, UPLOAD_TIMEOUT, LazyDocument, Pending, dump
 
-# Часовой «не доставлено»: отличает провал от законного None, который
-# возвращают терпимые к ошибке вызовы (не изменившаяся правка, погасшие
-# «часики»).
-_FAILED = object()
+log = logging.getLogger(__name__)
 
 # Сколько строка outbox «принадлежит» штатной отправке, прежде чем её увидит
 # фоновый отправщик. С запасом больше круга до Telegram и тика поллера.
 OUTBOX_GRACE = 60
-
-# Бюджет загрузки документа. Секундный default сессии (__main__._SESSION_TIMEOUT
-# = 15) — это per-request лимит ВСЕХ вызовов Bot API, ужатый ради быстрого
-# обнаружения мёртвого long-poll. Мегабайтный .xlsx через прокси в него не
-# влезает: выгрузка падала бы TimeoutError на каждой попытке, навсегда.
-_UPLOAD_TIMEOUT = 120
-
-
-def _dump(method: TelegramMethod[Any]) -> str:
-    """Метод aiogram в JSON — только то, что вызывающий задал явно.
-
-    exclude_unset обязателен, а не для компактности: незаданные поля у aiogram
-    хранят не None, а sentinel `Default`, который просит подставить настройку
-    бота в момент отправки. Он не сериализуем, да и не должен быть — при
-    восстановлении поле снова окажется незаданным и снова возьмёт умолчание.
-    """
-    return method.model_dump_json(exclude_unset=True)
-
-
-# raise — сбой отправки виден наверху;
-# not_modified — «message is not modified» это успех: пользователь нажал ту же
-#   кнопку второй раз, экран уже такой, какой нужно;
-# quiet — вызов косметический (удаление подсказки), его провал ничего не значит.
-OnError = Literal["raise", "not_modified", "quiet"]
-
-
-@dataclass(slots=True)
-class _LazyDocument:
-    """Ещё не собранный документ: содержимое появится при отправке."""
-
-    chat_id: int
-    build: Callable[[], bytes]
-    filename: str
-    caption: str | None
-
-
-@dataclass(slots=True)
-class _Pending:
-    method: TelegramMethod[Any] | _LazyDocument
-    on_error: OnError = "raise"
-    # Ключ FSM, которому после отправки нужно запомнить message_id ответа как
-    # prompt_id. Единственное место, где id известен только после сети.
-    prompt_for: StorageKey | None = None
-    # Пережить ли этот вызов смерть процесса — см. models.OutboxMessage.
-    durable: bool = False
-    # id строки outbox, проставляется при записи в транзакцию.
-    outbox_id: int | None = None
-    # Чем заменить вызов, если он не прошёл. Отправкой, и только ею: сообщение
-    # можно добавить в чат в любой момент, ничего не затерев, — в отличие от
-    # правки, которая перерисовывает конкретный экран.
-    fallback: SendMessage | None = None
 
 
 class Responder:
@@ -108,7 +52,7 @@ class Responder:
     """
 
     def __init__(self) -> None:
-        self._queue: list[_Pending] = []
+        self._queue: list[Pending] = []
         self._delivered: list[int] = []
         # Заполняется сливом, читается middleware: (ключ FSM, id подсказки).
         self.prompt_updates: list[tuple[StorageKey, int]] = []
@@ -148,7 +92,7 @@ class Responder:
         нужен следующему шагу, чтобы её удалить.
         """
         self._queue.append(
-            _Pending(
+            Pending(
                 self._message(message.chat.id, text, reply_markup, parse_mode),
                 prompt_for=prompt_for,
             )
@@ -175,7 +119,7 @@ class Responder:
         подтверждения оплат.
         """
         self._queue.append(
-            _Pending(
+            Pending(
                 self._message(message.chat.id, text, reply_markup, parse_mode),
                 durable=True,
             )
@@ -219,7 +163,7 @@ class Responder:
         """
         fallback = self._message(message.chat.id, text, reply_markup, None)
         self._queue.append(
-            _Pending(
+            Pending(
                 EditMessageText(
                     chat_id=message.chat.id,
                     message_id=message.message_id,
@@ -242,7 +186,7 @@ class Responder:
         и если окно закрылось, повторять нечего — «часики» гаснут сами.
         """
         self._queue.append(
-            _Pending(
+            Pending(
                 AnswerCallbackQuery(callback_query_id=cb.id, text=text, show_alert=show_alert),
                 on_error="quiet",
             )
@@ -276,8 +220,8 @@ class Responder:
         «часики» и ничего больше.
         """
         self._queue.append(
-            _Pending(
-                _LazyDocument(
+            Pending(
+                LazyDocument(
                     chat_id=message.chat.id, build=build, filename=filename, caption=caption
                 ),
                 fallback=self._message(
@@ -294,7 +238,7 @@ class Responder:
         if not message_id:
             return
         self._queue.append(
-            _Pending(
+            Pending(
                 DeleteMessage(chat_id=chat_id, message_id=message_id),
                 on_error="quiet",
             )
@@ -331,7 +275,7 @@ class Responder:
                     item,
                     OutboxMessage(
                         method=type(method).__name__,
-                        payload=_dump(method),
+                        payload=dump(method),
                         next_attempt_at=due,
                     ),
                 )
@@ -379,7 +323,7 @@ class Responder:
         queued, self._queue = self._queue, []
         for item in queued:
             result, used_fallback = await self._deliver(bot, item)
-            if result is _FAILED:
+            if result is FAILED:
                 if item.prompt_for is not None:
                     self.failed_prompts.append(item.prompt_for)
                 continue
@@ -396,7 +340,7 @@ class Responder:
             ):
                 self.prompt_updates.append((item.prompt_for, result.message_id))
 
-    async def _deliver(self, bot: Bot, item: _Pending) -> tuple[Any, bool]:
+    async def _deliver(self, bot: Bot, item: Pending) -> tuple[Any, bool]:
         """Отправить намерение, при неудаче — его запасной вариант.
 
         Возвращает (результат, ушло ли запасным сообщением): вызывающему важно
@@ -412,7 +356,7 @@ class Responder:
                 exc_info=True,
             )
         if item.fallback is None:
-            return _FAILED, False
+            return FAILED, False
         try:
             return await bot(item.fallback), True
         except Exception:
@@ -421,12 +365,12 @@ class Responder:
                 " — останется в очереди" if item.outbox_id else "",
                 exc_info=True,
             )
-            return _FAILED, True
+            return FAILED, True
 
     @staticmethod
-    async def _send(bot: Bot, item: _Pending) -> Any:
+    async def _send(bot: Bot, item: Pending) -> Any:
         method = item.method
-        if isinstance(method, _LazyDocument):
+        if isinstance(method, LazyDocument):
             # to_thread: сборка книги openpyxl — чистый CPU, и в цикле событий
             # ей делать нечего. Замка здесь уже нет, но соседние апдейты всё
             # равно ждали бы своей очереди на исполнение.
@@ -440,7 +384,7 @@ class Responder:
             # per-request default сессии (15 с, ужат ради быстрого обнаружения
             # мёртвого long-poll — см. __main__._SESSION_TIMEOUT) мегабайтной
             # загрузке через прокси заведомо мал.
-            kwargs: dict[str, Any] = {"request_timeout": _UPLOAD_TIMEOUT}
+            kwargs: dict[str, Any] = {"request_timeout": UPLOAD_TIMEOUT}
         else:
             kwargs = {}
         try:
