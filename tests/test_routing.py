@@ -11,13 +11,13 @@ from sqlalchemy import select
 
 from lesson_tracker.db.models import FsmRecord, Operation, Student
 from lesson_tracker.services import StudentService, access
-from tests.bot_harness import make_update_message
-from tests.reading import last_callback_answer, student_names
+from tests.helpers.bot_harness import make_update_message
+from tests.helpers.reading import last_callback_answer, student_names
 
 ADMIN = 1
 
 
-async def test_start_прерывает_диалог_а_не_становится_именем(harness, sessionmaker):
+async def test_start_interrupts_the_dialog_instead_of_becoming_a_name(harness, sessionmaker):
     """У /start нет фильтра состояния, поэтому он обязан выигрывать у
     FSM-обработчика. Подключи роутер меню не первым — и «/start» посреди
     добавления ученика был бы принят за имя."""
@@ -30,7 +30,7 @@ async def test_start_прерывает_диалог_а_не_становитс�
     assert await student_names(sessionmaker) == []
 
 
-async def test_нажатие_кнопки_сбрасывает_начатый_ввод(harness, session, sessionmaker, students):
+async def test_pressing_a_button_resets_input_in_progress(harness, session, sessionmaker, students):
     """«Введите сумму» для одного ученика не должно пережить переход к другому."""
     a = await students.create(ADMIN, "Аня", 160000)
     b = await students.create(ADMIN, "Боря", 200000)
@@ -47,7 +47,7 @@ async def test_нажатие_кнопки_сбрасывает_начатый_�
     assert fresh_b.balance == 0, "и к Боре тоже"
 
 
-async def test_noop_не_сбрасывает_ввод(harness, session, sessionmaker, students):
+async def test_noop_does_not_reset_input(harness, session, sessionmaker, students):
     """Единственное исключение из правила выше: noop — это неактивная кнопка
     вроде номера страницы, она не должна ломать начатый ввод."""
     a = await students.create(ADMIN, "Аня", 160000)
@@ -62,14 +62,15 @@ async def test_noop_не_сбрасывает_ввод(harness, session, session
     assert fresh.balance == 1, "оплата обязана была примениться"
 
 
-async def test_нераспознанный_колбэк_получает_ответ(harness):
+async def test_an_unrecognized_callback_gets_an_answer(harness):
     """Хвостовой роутер: без него кнопка с незнакомыми данными оставила бы
     вечно крутящийся индикатор."""
     await harness.click("такой_команды_нет", user_id=ADMIN)
     assert last_callback_answer(harness) == ""
 
 
-async def test_подделанный_id_не_роняет_обработчик(harness):
+async def test_a_forged_id_does_not_crash_the_handler(harness):
+    """Подделанный id не роняет обработчик."""
     for data in ("card:abc", "charge:", "pay:xx", "hist:zz", "price:!"):
         await harness.click(data, user_id=ADMIN)
         assert "устарел" in last_callback_answer(harness).lower(), (
@@ -77,7 +78,7 @@ async def test_подделанный_id_не_роняет_обработчик(
         )
 
 
-async def test_два_быстрых_ответа_не_возвращают_диалог_назад(harness, sessionmaker):
+async def test_two_fast_replies_do_not_send_the_dialog_backwards(harness, sessionmaker):
     """StateFilter обязан смотреть на состояние внутри замка, а не на снимок
     до него.
 
@@ -109,7 +110,7 @@ async def test_два_быстрых_ответа_не_возвращают_ди
     assert states in ([None], []), f"диалог не должен остаться открытым: {states}"
 
 
-async def test_админская_команда_прерывает_начатый_ввод(harness, session, sessionmaker):
+async def test_an_admin_command_interrupts_input_in_progress(harness, session, sessionmaker):
     """Роутер админки подключён раньше основного и забирает апдейт целиком,
     поэтому сбросить диалог обязан он сам — как это делают /start и /menu.
 
@@ -134,7 +135,9 @@ async def test_админская_команда_прерывает_начаты
     assert operations == [], "и в журнале операций взяться неоткуда"
 
 
-async def test_админская_команда_прерывает_диалог_и_у_неадмина(harness, session, sessionmaker):
+async def test_an_admin_command_interrupts_the_dialog_for_non_admins_too(
+    harness, session, sessionmaker
+):
     """Роутер админки поглощает команду у кого угодно — значит и диалог обязан
     сбрасывать у кого угодно.
 

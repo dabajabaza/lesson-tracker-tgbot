@@ -18,7 +18,7 @@ from lesson_tracker.db.models import (  # импорт регистрирует 
     Base,
     Student,
 )
-from tests.schema import PROJECT_ROOT, apply_migrations
+from tests.helpers.schema import PROJECT_ROOT, apply_migrations
 
 
 def _diff_against_models(db_path) -> list:
@@ -30,7 +30,8 @@ def _diff_against_models(db_path) -> list:
         engine.dispose()
 
 
-def test_схема_из_миграций_совпадает_с_моделями(tmp_path):
+def test_the_migrated_schema_matches_the_models(tmp_path):
+    """Схема, построенная миграциями, совпадает с моделями."""
     db_path = tmp_path / "schema.db"
     apply_migrations(f"sqlite:///{db_path}")
 
@@ -40,7 +41,7 @@ def test_схема_из_миграций_совпадает_с_моделями
 BASELINE_REVISION = "2b20bfa13e12"
 
 
-def test_существующая_база_штампуется_и_догоняет_голову(tmp_path):
+def test_an_existing_database_is_stamped_and_catches_up_to_head(tmp_path):
     """Боевая база на момент перехода: схема базовой ревизии есть, а записи в
     alembic_version нет. Базовая миграция обязана распознать это и ничего не
     создавать (иначе выкатка упала бы на «table already exists»), а следующие —
@@ -84,7 +85,7 @@ def test_существующая_база_штампуется_и_догоня�
     assert _diff_against_models(db_path) == [], "и схема должна сойтись с моделями"
 
 
-def test_откат_до_нуля_и_обратно_чист(tmp_path):
+def test_downgrade_to_base_and_back_is_clean(tmp_path):
     """Миграции применяются при старте бота, значит путь вниз — тоже боевой
     код, а не только аварийный выход."""
     db_path = tmp_path / "roundtrip.db"
@@ -108,7 +109,7 @@ def test_откат_до_нуля_и_обратно_чист(tmp_path):
     assert _diff_against_models(db_path) == []
 
 
-def test_миграция_переживает_остаток_от_откаченного_релиза(tmp_path):
+def test_a_migration_survives_leftovers_from_a_rolled_back_release(tmp_path):
     """На боевой базе processed_updates уже существует: её создал через
     create_all релиз v0.2.0 с первой, откаченной версией идемпотентности. Откат
     вернул код, но таблицу не удалил, а базовая миграция её не описывала.
@@ -149,7 +150,7 @@ def test_миграция_переживает_остаток_от_откаче�
     assert revision[0][0] != BASELINE_REVISION, "ревизия обязана догнать голову"
 
 
-def test_база_с_частью_схемы_достраивается_а_не_штампуется(tmp_path):
+def test_a_partial_schema_is_completed_not_stamped(tmp_path):
     """База, где есть часть таблиц, обязана получить недостающие.
 
     Гард baseline-миграции спрашивал только про `students` и при её наличии
@@ -180,7 +181,7 @@ def test_база_с_частью_схемы_достраивается_а_не_
     assert not missing, f"миграция не создала: {sorted(missing)}"
 
 
-def test_fsm_ключи_старого_формата_переезжают_на_новый(tmp_path):
+def test_old_format_fsm_keys_migrate_to_the_new_one(tmp_path):
     """Формат ключа FSM сменился (шестое поле business_connection_id), и без
     переписывания строк все незавершённые диалоги терялись при деплое: код
     искал 6-частный ключ, строки лежали под 5-частным, raw_state читался как
@@ -205,7 +206,7 @@ def test_fsm_ключи_старого_формата_переезжают_на_
     )
 
 
-def test_outbox_с_чужой_схемой_пересоздаётся_а_не_штампуется(tmp_path):
+def test_an_outbox_with_a_foreign_schema_is_recreated_not_stamped(tmp_path):
     """Гард по одному has_table штамповал ревизию поверх остатка с ДРУГИМИ
     колонками: каждый INSERT в outbox падал бы на «no column named attempts»,
     то есть каждая денежная операция откатывалась целиком, и upgrade head уже
@@ -230,7 +231,7 @@ def test_outbox_с_чужой_схемой_пересоздаётся_а_не_ш
     assert "ix_outbox_next_attempt" in indexes
 
 
-def test_полный_остаток_outbox_сохраняет_строки(tmp_path):
+def test_a_complete_outbox_leftover_keeps_its_rows(tmp_path):
     """Совместимый остаток (откаченная попытка той же схемы) трогать нельзя:
     недоставленные строки в нём — обещания, их дожмёт отправщик."""
     db_path = tmp_path / "outbox-full.db"

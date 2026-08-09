@@ -15,14 +15,15 @@ from unittest.mock import patch
 
 from lesson_tracker.db.models import ProcessedUpdate
 from lesson_tracker.services import StudentService, access
-from tests.bot_harness import make_update_message
-from tests.reading import processed_update_ids, student_prices
+from tests.helpers.bot_harness import make_update_message
+from tests.helpers.reading import processed_update_ids, student_prices
 from tests.test_concurrency import _write_lock_free
 
 ADMIN = 1
 
 
-async def test_повтор_апдейта_не_создаёт_второго_ученика(harness, sessionmaker):
+async def test_a_repeated_update_does_not_create_a_second_student(harness, sessionmaker):
+    """Повтор апдейта не создаёт второго ученика."""
     await harness.click("add", user_id=ADMIN)
     await harness.send("Лера", user_id=ADMIN)
 
@@ -35,7 +36,8 @@ async def test_повтор_апдейта_не_создаёт_второго_у
     assert 777 in await processed_update_ids(sessionmaker)
 
 
-async def test_разные_апдейты_обрабатываются_оба(harness, sessionmaker):
+async def test_different_updates_are_both_processed(harness, sessionmaker):
+    """Разные апдейты обрабатываются оба."""
     await harness.click("add", user_id=ADMIN)
     await harness.send("Лера", user_id=ADMIN)
     await harness.dp.feed_update(
@@ -53,7 +55,7 @@ async def test_разные_апдейты_обрабатываются_оба(h
     assert 801 in marks and 802 in marks
 
 
-async def test_повтор_не_даёт_второго_ответа(harness):
+async def test_a_repeat_produces_no_second_reply(harness):
     """Дубль отбрасывается до обработчика, значит и второго подтверждения
     пользователь не увидит — иначе оно читалось бы как вторая оплата."""
     await harness.click("add", user_id=ADMIN)
@@ -68,13 +70,13 @@ async def test_повтор_не_даёт_второго_ответа(harness):
     assert len(harness.session.sent_texts()) == after_first
 
 
-async def test_упавший_обработчик_не_отмечается_и_повторяется(harness, sessionmaker):
+async def test_a_failed_handler_is_not_marked_and_is_retried(harness, sessionmaker):
     """Отметка живёт в одной транзакции с изменением: откатилось изменение —
     откатилась и она. Иначе потерянный апдейт числился бы применённым, и
     повторить его было бы уже нельзя.
 
     Роняем сохранение, а не отправку: отправка теперь идёт ПОСЛЕ коммита
-    (см. middlewares.py) и на судьбу транзакции влиять не может.
+    (см. bot/middlewares/) и на судьбу транзакции влиять не может.
     """
     await harness.click("add", user_id=ADMIN)
     await harness.send("Лера", user_id=ADMIN)
@@ -93,7 +95,7 @@ async def test_упавший_обработчик_не_отмечается_и_
     assert await student_prices(sessionmaker) == [("Лера", 160000)]
 
 
-async def test_старые_отметки_вычищаются(harness, sessionmaker):
+async def test_old_marks_are_purged(harness, sessionmaker):
     """Иначе таблица растёт вечно. TTL — неделя при суточном хранении у
     Telegram, с запасом. Уборка живёт у фонового отправщика, на его часе, —
     а не на пути апдейта."""
@@ -111,7 +113,7 @@ async def test_старые_отметки_вычищаются(harness, session
     assert marks, "свежая отметка текущего апдейта должна остаться"
 
 
-async def test_чужой_апдейт_не_пишет_в_базу(harness, sessionmaker):
+async def test_a_strangers_update_does_not_write_to_the_database(harness, sessionmaker):
     """Спам не должен стоить строки в таблице и блокировки записи.
 
     Бот находится в поиске Telegram по имени (L10), так что поток чужих
@@ -129,7 +131,7 @@ async def test_чужой_апдейт_не_пишет_в_базу(harness, sess
     assert await processed_update_ids(sessionmaker) == [], "и не пишет о нём в базу"
 
 
-async def test_допущенный_позже_обрабатывается_нормально(harness, sessionmaker):
+async def test_a_user_allowed_later_is_processed_normally(harness, sessionmaker):
     """Отказ не должен «съедать» апдейт навсегда: отметки нет, значит повтор
     того же update_id после выдачи доступа пройдёт как обычно."""
     update = make_update_message("привет", user_id=999, update_id=4002)
@@ -145,7 +147,7 @@ async def test_допущенный_позже_обрабатывается_но
     assert 4002 in await processed_update_ids(sessionmaker), "теперь отметка нужна"
 
 
-async def test_повтор_не_оставляет_открытой_транзакции(harness, sessionmaker, db_path):
+async def test_a_repeat_leaves_no_open_transaction(harness, sessionmaker, db_path):
     """Отброшенный повтор обязан закрыть за собой транзакцию.
 
     SELECT на проверку отметки уже открывает транзакцию, и она у нас

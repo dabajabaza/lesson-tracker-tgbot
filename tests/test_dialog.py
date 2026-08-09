@@ -9,12 +9,12 @@
 middleware, то же FSM-хранилище, та же схема из миграций.
 """
 
-from tests.reading import student_prices
+from tests.helpers.reading import student_prices
 
 ADMIN = 1  # совпадает с TEST_ADMIN_IDS в conftest
 
 
-async def test_добавление_ученика_проходит_весь_диалог(harness, sessionmaker):
+async def test_adding_a_student_walks_the_whole_dialog(harness, sessionmaker):
     """Кнопка → имя → цена → ученик в базе.
 
     Падение на любом шаге означает, что два писателя в SQLite снова спорят за
@@ -30,7 +30,7 @@ async def test_добавление_ученика_проходит_весь_д�
     assert "Не получилось выполнить действие" not in replies
 
 
-async def test_диалог_переживает_пересборку_диспетчера(harness, sessionmaker, container):
+async def test_a_dialog_survives_rebuilding_the_dispatcher(harness, sessionmaker, container):
     """Состояние диалога живёт в БД именно ради этого: деплой перезапускает
     процесс, а начатый ввод не должен пропадать.
 
@@ -57,7 +57,7 @@ async def test_диалог_переживает_пересборку_диспе
     assert await student_prices(sessionmaker) == [("Лера", 160000)]
 
 
-async def test_посторонний_не_проходит_дальше_доступа(harness, sessionmaker):
+async def test_a_stranger_gets_no_further_than_the_access_check(harness, sessionmaker):
     """Бот молчит незнакомцам, и диалог для них не начинается."""
     await harness.click("add", user_id=999)
     await harness.send("Чужой", user_id=999)

@@ -28,8 +28,8 @@ from lesson_tracker.config import Config
 from lesson_tracker.db.engine import create_db
 from lesson_tracker.di import build_container
 from lesson_tracker.services import HistoryService, PaymentService, StudentService, ViewPrefService
-from tests.bot_harness import FAKE_BOT_TOKEN, BotHarness, RecordingSession
-from tests.schema import apply_migrations
+from tests.helpers.bot_harness import FAKE_BOT_TOKEN, BotHarness, RecordingSession
+from tests.helpers.schema import apply_migrations
 
 # Роутеры объявлены синглтонами на уровне модуля — для прода это верно, там
 # диспетчер собирается ровно один раз. Но Router может быть привязан только к

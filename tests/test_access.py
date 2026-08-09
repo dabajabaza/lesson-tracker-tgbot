@@ -149,7 +149,7 @@ async def test_middleware_ignores_plain_start_from_stranger(harness):
     assert await _reaches_handler(harness, STRANGER, "/start") is False
 
 
-async def test_погашенный_инвайт_второй_раз_не_срабатывает(harness, sessionmaker):
+async def test_a_redeemed_invite_does_not_work_a_second_time(harness, sessionmaker):
     """Одноразовость держится атомарным UPDATE, а не проверкой в коде — но
     убедиться в этом стоит на живом пути, а не только на сервисе."""
     async with sessionmaker() as s:

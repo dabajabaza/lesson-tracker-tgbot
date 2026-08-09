@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from lesson_tracker.db.engine import READONLY
 from lesson_tracker.db.models import FsmRecord
 from lesson_tracker.services import StudentService
-from tests.bot_harness import make_update_callback, make_update_message
-from tests.reading import balances_by_name
+from tests.helpers.bot_harness import make_update_callback, make_update_message
+from tests.helpers.reading import balances_by_name
 
 A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS
 
@@ -46,7 +46,10 @@ def _write_lock_free(db_path) -> bool:
         con.close()
 
 
-async def test_одновременные_апдейты_разных_владельцев_не_теряются(harness, session, sessionmaker):
+async def test_concurrent_updates_from_different_owners_are_not_lost(
+    harness, session, sessionmaker
+):
+    """Одновременные апдейты разных владельцев не теряются."""
     students = StudentService(session)
     a = await students.create(A, "Аня", 160000)
     b = await students.create(B, "Боря", 160000)
@@ -65,7 +68,7 @@ async def test_одновременные_апдейты_разных_владе
     assert await balances_by_name(sessionmaker) == {"Аня": -1, "Боря": -1}
 
 
-async def test_пачка_одновременных_апдейтов_одного_владельца(harness, session, sessionmaker):
+async def test_a_burst_of_concurrent_updates_from_one_owner(harness, session, sessionmaker):
     """Двойной тап по одной кнопке: обе операции обязаны примениться и
     сложиться, а не потеряться в гонке read-modify-write."""
     students = StudentService(session)
@@ -85,7 +88,9 @@ async def test_пачка_одновременных_апдейтов_одног
     assert await balances_by_name(sessionmaker) == {"Аня": -5}
 
 
-async def test_во_время_сети_база_свободна_для_записи(harness, session, sessionmaker, db_path):
+async def test_the_database_is_free_for_writing_while_talking_to_the_network(
+    harness, session, sessionmaker, db_path
+):
     """Главное свойство, ради которого разворачивался порядок.
 
     Пока отправка стояла внутри транзакции, блокировка записи держалась весь
@@ -118,8 +123,8 @@ async def test_во_время_сети_база_свободна_для_зап�
     assert all(free), "во время вызова Telegram транзакция апдейта должна быть уже закрыта"
 
 
-async def test_readonly_соединение_не_берёт_блокировку_записи(engine, db_path):
-    """Пометка READONLY (db.py) открывает транзакцию как DEFERRED.
+async def test_a_readonly_connection_takes_no_write_lock(engine, db_path):
+    """Пометка READONLY (db/engine.py) открывает транзакцию как DEFERRED.
 
     С контрольным случаем рядом: без пометки то же самое чтение блокировку
     берёт. Пара нужна целиком — сама по себе первая половина прошла бы и на
@@ -139,7 +144,7 @@ async def test_readonly_соединение_не_берёт_блокировк�
         )
 
 
-async def test_чужой_апдейт_не_открывает_ни_одной_транзакции(harness, container):
+async def test_a_strangers_update_opens_no_transaction_at_all(harness, container):
     """Спам не имеет права стоить транзакции — никакой, даже читающей IMMEDIATE.
 
     Проверка доступа жила внутри единицы работы: каждый чужой апдейт брал

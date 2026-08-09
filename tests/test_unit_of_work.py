@@ -12,12 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lesson_tracker.bot.storage import ReadOnlyFsmView, SqlAlchemyStorage, _key
 from lesson_tracker.db.models import FsmRecord, Student
-from tests.reading import fsm_state, student_names
+from tests.helpers.reading import fsm_state, student_names
 
 KEY = StorageKey(bot_id=1, chat_id=42, user_id=42)
 
 
-async def test_fsm_и_бизнес_запись_фиксируются_одной_транзакцией(container, sessionmaker):
+async def test_fsm_and_business_writes_commit_in_one_transaction(container, sessionmaker):
+    """Запись FSM и бизнес-запись фиксируются одной транзакцией."""
     async with container() as scope:
         session = await scope.get(AsyncSession)
         storage = await scope.get(BaseStorage)
@@ -30,7 +31,7 @@ async def test_fsm_и_бизнес_запись_фиксируются_одно�
     assert await student_names(sessionmaker) == ["Лера"]
 
 
-async def test_исключение_откатывает_и_состояние_и_данные(container, sessionmaker):
+async def test_an_exception_rolls_back_both_state_and_data(container, sessionmaker):
     """Обе записи исчезают вместе. Ни «состояние без данных», ни «данные без
     состояния» не существуют — промежуточных исходов у транзакции нет."""
     with pytest.raises(RuntimeError, match="обработчик упал"):
@@ -48,7 +49,7 @@ async def test_исключение_откатывает_и_состояние_�
     assert await student_names(sessionmaker) == []
 
 
-async def test_хранилище_и_сессия_запроса_делят_одну_транзакцию(container):
+async def test_storage_and_the_request_session_share_one_transaction(container):
     """Хранилище видит незакоммиченную запись сессии — значит, соединение
     общее. Два разных соединения друг для друга невидимы до коммита."""
     async with container() as scope:
@@ -62,7 +63,7 @@ async def test_хранилище_и_сессия_запроса_делят_од
         assert await storage.get_state(KEY) == "Flow:probe"
 
 
-async def test_хранилище_диспетчера_отказывается_писать(container):
+async def test_the_dispatcher_storage_refuses_to_write(container):
     """Инвариант «пишет только область запроса» — свойство кода: если будущая
     версия aiogram начнёт писать через хранилище диспетчера, это громко упадёт
     здесь, а не всплывёт как «database is locked» в проде."""
@@ -76,7 +77,7 @@ async def test_хранилище_диспетчера_отказывается_
         await view.set_data(KEY, {"probe": 1})
 
 
-async def test_сбой_отправки_не_отменяет_записанное(harness, sessionmaker):
+async def test_a_send_failure_does_not_undo_what_was_written(harness, sessionmaker):
     """Сеть больше не участвует в транзакции, и провал отправки её не рушит.
 
     Порядок стал «обработчик → коммит → отправка»: пока отправка стояла внутри
