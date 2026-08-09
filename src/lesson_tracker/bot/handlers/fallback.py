@@ -10,7 +10,7 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery
 from dishka import FromDishka
 
-from ..ui import Responder
+from lesson_tracker.bot.ui import Responder
 
 router = Router()
 router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)

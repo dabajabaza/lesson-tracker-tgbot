@@ -7,7 +7,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from lesson_tracker.config import load_config
-from lesson_tracker.models import Base  # импорт модуля регистрирует все модели на Base.metadata
+from lesson_tracker.db.models import Base  # импорт модуля регистрирует все модели на Base.metadata
 
 # Значение-заглушка из alembic.ini: означает «URL не задан».
 _ALEMBIC_INI_PLACEHOLDER = "driver://user:pass@localhost/dbname"

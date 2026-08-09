@@ -5,7 +5,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Student, now_ts
+from lesson_tracker.db.models import Student, now_ts
+
 from ._operations import record_operation
 from .students import MIN_PRICE, StudentService
 

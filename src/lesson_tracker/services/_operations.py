@@ -7,7 +7,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Operation, Student
+from lesson_tracker.db.models import Operation, Student
 
 
 async def record_operation(

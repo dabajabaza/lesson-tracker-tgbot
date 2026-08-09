@@ -5,17 +5,18 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message
 from dishka import FromDishka
 
-from ..csv_export import to_csv_bytes
-from ..export_data import (
+from lesson_tracker.bot.csv_export import to_csv_bytes
+from lesson_tracker.bot.export_data import (
     history_rows,
     rows_to_xlsx,
     snapshot_operations,
     snapshot_students,
     students_rows,
 )
-from ..keyboards import export_kb
-from ..services import HistoryService, StudentService
-from ..ui import Responder
+from lesson_tracker.bot.keyboards import export_kb
+from lesson_tracker.bot.ui import Responder
+from lesson_tracker.services import HistoryService, StudentService
+
 from ._common import screen_of
 
 router = Router()

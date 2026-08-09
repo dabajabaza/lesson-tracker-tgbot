@@ -8,7 +8,8 @@
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .models import Student
+from lesson_tracker.db.models import Student
+
 from .render import list_button_label
 
 PAGE_SIZE = 10

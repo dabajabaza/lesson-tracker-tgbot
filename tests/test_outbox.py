@@ -17,8 +17,8 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods import GetMe
 from sqlalchemy import select
 
-from lesson_tracker import outbox
-from lesson_tracker.models import FsmRecord, OutboxMessage, now_ts
+from lesson_tracker.db.models import FsmRecord, OutboxMessage, now_ts
+from lesson_tracker.runtime import outbox
 from lesson_tracker.services import StudentService
 from tests.bot_harness import make_update_callback
 from tests.reading import fsm_state, queued_messages, student_balances, student_prices
@@ -227,7 +227,7 @@ async def test_сбой_уборки_не_превращает_успех_в_о�
     дослать «Попробуйте ещё раз» вслед за «Ученик добавлен»: преподаватель
     введёт данные заново, и операция задвоится.
     """
-    import lesson_tracker.middlewares as mw
+    import lesson_tracker.bot.middlewares as mw
 
     async def boom(self, container, ui):
         raise RuntimeError("вторая транзакция не открылась")
@@ -384,7 +384,7 @@ async def test_поздний_prompt_id_не_воскрешает_закрыты
     завершить диалог раньше. Дописать id в закрытый диалог значило бы
     воскресить пустую строку мусором {"prompt_id": …} — и она жила бы вечно.
     """
-    import lesson_tracker.middlewares as mw
+    import lesson_tracker.bot.middlewares as mw
 
     original = mw.DbSessionMiddleware._settle
     settles: list = []
@@ -563,7 +563,7 @@ async def test_подсказка_не_остаётся_висеть_при_бы
     Теперь `_settle`, обнаружив закрытый диалог, убирает подсказку сам — id у
     него на руках.
     """
-    import lesson_tracker.middlewares as mw
+    import lesson_tracker.bot.middlewares as mw
 
     await harness.click("add", user_id=ADMIN)
 

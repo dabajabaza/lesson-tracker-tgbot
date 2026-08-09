@@ -17,11 +17,11 @@ from aiogram.fsm.storage.base import BaseStorage
 from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from .bot.storage import SqlAlchemyStorage
+from .bot.ui import Responder
 from .config import Config
-from .db import create_db
+from .db.engine import create_db
 from .services import HistoryService, PaymentService, StudentService, ViewPrefService
-from .storage import SqlAlchemyStorage
-from .ui import Responder
 
 
 class AppProvider(Provider):

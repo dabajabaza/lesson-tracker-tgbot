@@ -15,8 +15,8 @@ from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from .db import READONLY
-from .models import AllowedUser, Invite, now_ts
+from lesson_tracker.db.engine import READONLY
+from lesson_tracker.db.models import AllowedUser, Invite, now_ts
 
 # Длина кода в байтах до base64url: 16 байт ≈ 22 символа — не перебирается и
 # при этом ссылка остаётся читаемой.

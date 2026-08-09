@@ -18,9 +18,9 @@ from dishka import FromDishka
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import access
-from .models import AllowedUser, Invite, fits_in_db, now_ts
-from .ui import Responder
+from lesson_tracker.bot.ui import Responder
+from lesson_tracker.db.models import AllowedUser, Invite, fits_in_db, now_ts
+from lesson_tracker.services import access
 
 log = logging.getLogger(__name__)
 

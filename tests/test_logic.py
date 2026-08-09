@@ -5,15 +5,15 @@
 случайность — на нём держатся и копирование шаблона, и пробы вторым
 соединением; переезд на :memory: тихо сломал бы и то, и другое."""
 
-from lesson_tracker.csv_export import to_csv
-from lesson_tracker.export_data import (
+from lesson_tracker.bot.csv_export import to_csv
+from lesson_tracker.bot.export_data import (
     history_rows,
     snapshot_operations,
     snapshot_students,
     students_rows,
 )
-from lesson_tracker.money import MAX_MONEY, format_money, parse_money_strict, to_rubles
-from lesson_tracker.render import lessons_word, render_operation, status_emoji
+from lesson_tracker.bot.render import lessons_word, render_operation, status_emoji
+from lesson_tracker.domain.money import MAX_MONEY, format_money, parse_money_strict, to_rubles
 
 A, B = 111, 222  # owner id двух разных пользователей
 

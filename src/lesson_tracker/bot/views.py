@@ -9,6 +9,9 @@ import math
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from lesson_tracker.db.models import Student
+from lesson_tracker.services import HistoryService, StudentService
+
 from .keyboards import (
     HISTORY_PAGE_SIZE,
     PAGE_SIZE,
@@ -17,9 +20,7 @@ from .keyboards import (
     home_kb,
     main_menu_kb,
 )
-from .models import Student
 from .render import list_button_label, render_card, render_operation
-from .services import HistoryService, StudentService
 
 SORT_LABELS = {"name": "по имени", "bal": "по остатку занятий", "due": "скоро оплата"}
 MAX_SEARCH_RESULTS = 20

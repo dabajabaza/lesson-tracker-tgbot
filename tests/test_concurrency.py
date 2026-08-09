@@ -18,8 +18,8 @@ import sqlite3
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from lesson_tracker.db import READONLY
-from lesson_tracker.models import FsmRecord
+from lesson_tracker.db.engine import READONLY
+from lesson_tracker.db.models import FsmRecord
 from lesson_tracker.services import StudentService
 from tests.bot_harness import make_update_callback, make_update_message
 from tests.reading import balances_by_name
