@@ -5,26 +5,10 @@
 FK намеренно не объявляем (как и в serverless-версии): целостность — в коде.
 """
 
-import time
-
 from sqlalchemy import JSON, BigInteger, Boolean, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-
-def now_ts() -> int:
-    return int(time.time())
-
-
-# Границы 64-битного INTEGER в SQLite. Python-числа безразмерны, и всё, что не
-# влезает, драйвер отвергает уже на привязке параметра — OverflowError вместо
-# «ничего не найдено». Значения приходят снаружи (callback_data подделывается
-# клиентом, /allow набирается руками), поэтому проверять надо на входе.
-SQLITE_INT_MIN = -(2**63)
-SQLITE_INT_MAX = 2**63 - 1
-
-
-def fits_in_db(value: int) -> bool:
-    return SQLITE_INT_MIN <= value <= SQLITE_INT_MAX
+from lesson_tracker.timeutils import now_ts
 
 
 class Base(DeclarativeBase):

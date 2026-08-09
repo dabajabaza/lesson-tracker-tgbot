@@ -1,23 +1,16 @@
 """Оплаты, списания и возвраты занятий."""
 
 import logging
-from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lesson_tracker.db.models import Student, now_ts
+from lesson_tracker.db.models import Student
+from lesson_tracker.domain.constants import MIN_PRICE
+from lesson_tracker.domain.values import PaymentResult
+from lesson_tracker.timeutils import now_ts
 
 from ._operations import record_operation
-from .students import MIN_PRICE, StudentService
-
-
-@dataclass
-class PaymentResult:
-    student: Student
-    lessons: int
-    remainder: int
-    prev_remainder: int
-
+from .students import StudentService
 
 log = logging.getLogger(__name__)
 

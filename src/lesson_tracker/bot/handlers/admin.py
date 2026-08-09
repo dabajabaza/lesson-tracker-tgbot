@@ -19,8 +19,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lesson_tracker.bot.ui import Responder
-from lesson_tracker.db.models import AllowedUser, Invite, fits_in_db, now_ts
+from lesson_tracker.db.limits import fits_in_db
+from lesson_tracker.db.models import AllowedUser, Invite
 from lesson_tracker.services import access
+from lesson_tracker.timeutils import now_ts
 
 log = logging.getLogger(__name__)
 
