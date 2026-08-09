@@ -4,7 +4,7 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from sqlalchemy import create_engine
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def apply_migrations(sync_url: str, revision: str = "head") -> None:

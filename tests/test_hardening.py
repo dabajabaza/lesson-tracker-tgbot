@@ -15,19 +15,20 @@ from lesson_tracker.bot.export_data import rows_to_xlsx
 from lesson_tracker.bot.handlers._common import as_int
 from lesson_tracker.db.models import AllowedUser, Student
 from lesson_tracker.services import PaymentService, StudentService
-from tests.bot_harness import make_update_callback
+from tests.helpers.bot_harness import make_update_callback
 
 ADMIN = 1
 HUGE = "9" * 23  # влезает в лимит callback_data, но не в 64-битный INTEGER
 
 
-def test_as_int_отвергает_число_шире_базы():
+def test_as_int_rejects_a_number_wider_than_the_database():
+    """as_int отвергает число шире диапазона БД."""
     assert as_int("5") == 5
     assert as_int("не число") is None
     assert as_int(HUGE) is None, "SQLite такое не примет — отвергать надо до него"
 
 
-async def test_подделанный_огромный_id_не_роняет_обработчик(harness, session, sessionmaker):
+async def test_a_forged_huge_id_does_not_crash_the_handler(harness, session, sessionmaker):
     """Раньше 23-значный id проходил разбор и падал на привязке параметра:
     пользователь видел «Не получилось выполнить действие» и трейсбек в
     журнале вместо «Кнопка устарела»."""
@@ -42,7 +43,8 @@ async def test_подделанный_огромный_id_не_роняет_об
     assert any("устарела" in t for t in answers), f"ожидался внятный отказ, а было: {answers}"
 
 
-async def test_огромный_id_в_allow_даёт_подсказку(harness, sessionmaker):
+async def test_a_huge_id_in_allow_gets_a_hint(harness, sessionmaker):
+    """Огромный id в /allow даёт подсказку, а не молчаливый отказ."""
     await harness.send(f"/allow {HUGE}", user_id=ADMIN)
 
     sent = [m.text or "" for m in harness.session.calls_of("SendMessage")]
@@ -51,7 +53,7 @@ async def test_огромный_id_в_allow_даёт_подсказку(harness,
         assert list(await s.scalars(select(AllowedUser))) == []
 
 
-def test_выгрузка_в_excel_не_исполняет_формулы():
+def test_the_excel_export_does_not_execute_formulas():
     """Имя, начинающееся с «=», openpyxl записывает настоящей формулой:
     выгрузка превращалась в исполняемый документ, а кривое выражение — в
     предложение Excel «восстановить файл». Экран стоял только на пути CSV."""
@@ -61,7 +63,7 @@ def test_выгрузка_в_excel_не_исполняет_формулы():
     assert cell.data_type == "s", "ячейка не должна быть формулой"
 
 
-async def test_нулевая_стоимость_не_роняет_оплату(session):
+async def test_a_zero_price_does_not_crash_a_payment(session):
     """Инвариант «стоимость больше нуля» держался только в обработчиках, а
     делит на неё сервис. Боевая база приехала из serverless-версии, так что
     унаследованная строка с нулём — не выдумка."""
@@ -75,7 +77,7 @@ async def test_нулевая_стоимость_не_роняет_оплату(
     assert await PaymentService(session, students).apply(ADMIN, broken.id, 1000) is None
 
 
-async def test_гигантский_поисковый_запрос_не_пробивает_лимит_telegram(harness, session):
+async def test_a_giant_search_query_does_not_breach_the_telegram_limit(harness, session):
     """Запрос — пользовательский текст до 4096 символов. Эхо без обрезки
     давало сообщение длиннее лимита: API отвечал 400, ответ молча терялся, и
     бот выглядел мёртвым — подсказка удалена, состояние очищено, в чате пусто.
@@ -92,7 +94,7 @@ async def test_гигантский_поисковый_запрос_не_про�
     assert all(len(t) <= 4096 for t in result), f"эхо пробило лимит: {max(map(len, result))}"
 
 
-def test_карточка_переживает_null_поля_последней_оплаты():
+def test_the_card_survives_null_last_payment_fields():
     """База пришла живой из serverless (L1): строка с датой оплаты, но
     NULL-суммой — не гипотеза. format_money(None) ронял карточку навсегда."""
     from lesson_tracker.bot.render import render_card
@@ -111,7 +113,7 @@ def test_карточка_переживает_null_поля_последней_
     assert "None" not in card
 
 
-def test_история_переживает_снимок_без_цены():
+def test_the_history_survives_a_snapshot_without_a_price():
     """snapshot_before — нетипизированный JSON из serverless; отсутствие ключа
     price роняло всю «Историю» ученика навсегда."""
     from lesson_tracker.bot.render import render_operation
@@ -131,7 +133,7 @@ def test_история_переживает_снимок_без_цены():
     assert "?" in line and "1 800 ₽" in line
 
 
-def test_числовые_ячейки_xlsx_остаются_числами():
+def test_numeric_xlsx_cells_stay_numbers():
     """guard_formula строковал всё подряд: =SUM() по выгрузке возвращал 0,
     сортировка по «Осталось занятий» ставила 10 перед 4, а Excel зеленил
     таблицу флагом «число как текст». Число формулой не станет — его не

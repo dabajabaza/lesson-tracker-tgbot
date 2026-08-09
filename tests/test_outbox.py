@@ -21,8 +21,8 @@ from lesson_tracker.db.models import FsmRecord, OutboxMessage
 from lesson_tracker.runtime import outbox
 from lesson_tracker.services import StudentService
 from lesson_tracker.timeutils import now_ts
-from tests.bot_harness import make_update_callback
-from tests.reading import fsm_state, queued_messages, student_balances, student_prices
+from tests.helpers.bot_harness import make_update_callback
+from tests.helpers.reading import fsm_state, queued_messages, student_balances, student_prices
 
 ADMIN = 1
 
@@ -40,7 +40,7 @@ async def _make_due(sessionmaker) -> None:
         await s.commit()
 
 
-async def test_удачная_отправка_не_оставляет_следов(harness, sessionmaker):
+async def test_a_successful_send_leaves_no_trace(harness, sessionmaker):
     """Штатный путь: ответ ушёл сразу, очередь снова пуста. Иначе таблица
     росла бы на каждый апдейт, а фоновый отправщик слал бы дубли."""
     await harness.click("add", user_id=ADMIN)
@@ -51,7 +51,7 @@ async def test_удачная_отправка_не_оставляет_след�
     assert await queued_messages(sessionmaker) == []
 
 
-async def test_сбой_отправки_оставляет_обещание_и_оно_дожимается(harness, sessionmaker):
+async def test_a_failed_send_leaves_a_promise_and_it_gets_delivered(harness, sessionmaker):
     """Главный сценарий. Операция применена, ответ не ушёл — обещание осталось
     в очереди, и следующий заход отправщика его выполняет."""
     await harness.click("add", user_id=ADMIN)
@@ -78,7 +78,7 @@ async def test_сбой_отправки_оставляет_обещание_и_
     )
 
 
-async def test_повторная_доставка_не_повторяет_операцию(harness, sessionmaker):
+async def test_redelivery_does_not_repeat_the_operation(harness, sessionmaker):
     """Дожимается ОТВЕТ, а не действие. Иначе очередь стала бы вторым, тихим
     способом добавить ученика."""
     await harness.click("add", user_id=ADMIN)
@@ -93,7 +93,7 @@ async def test_повторная_доставка_не_повторяет_оп�
     assert await student_balances(sessionmaker) == [("Лера", 0)], "ученик не должен задвоиться"
 
 
-async def test_свежая_строка_не_видна_отправщику(harness, sessionmaker):
+async def test_a_fresh_row_is_invisible_to_the_sender(harness, sessionmaker):
     """Отправщик не имеет права трогать то, что прямо сейчас отправляет
     штатный путь: иначе обычный ответ приходит дважды — а для денег это ровно
     тот двусмысленный сигнал, которого вся схема и избегает."""
@@ -108,7 +108,7 @@ async def test_свежая_строка_не_видна_отправщику(ha
     assert len(await queued_messages(sessionmaker)) == 1, "строка должна дождаться своего срока"
 
 
-async def test_правка_экрана_не_кладётся_в_очередь(harness, session, sessionmaker):
+async def test_a_screen_edit_is_not_queued(harness, session, sessionmaker):
     """Очередь несёт сообщения, а не экраны.
 
     Отложенная правка вернула бы пользователя на экран, с которого он уже
@@ -129,7 +129,7 @@ async def test_правка_экрана_не_кладётся_в_очередь
     assert await queued_messages(sessionmaker) == [], "правку повторять нельзя"
 
 
-async def test_неудача_дожимки_переносит_попытку(harness, sessionmaker):
+async def test_a_failed_retry_reschedules_the_attempt(harness, sessionmaker):
     """Сеть лежит и на повторе: строка остаётся, но следующая попытка
     откладывается — иначе отправщик колотился бы в неё каждые пять секунд."""
     await harness.click("add", user_id=ADMIN)
@@ -147,7 +147,7 @@ async def test_неудача_дожимки_переносит_попытку(h
     assert queued[0].next_attempt_at > queued[0].created_at, "повтор обязан быть отложен"
 
 
-async def test_откат_не_оставляет_обещания(harness, sessionmaker):
+async def test_a_rollback_leaves_no_promise(harness, sessionmaker):
     """Обещание живёт в одной транзакции с операцией: не случилось операции —
     не должно остаться и обещания ответить о ней."""
     await harness.click("add", user_id=ADMIN)
@@ -160,7 +160,7 @@ async def test_откат_не_оставляет_обещания(harness, sess
     assert await queued_messages(sessionmaker) == []
 
 
-async def test_просроченное_обещание_выбрасывается(harness, sessionmaker):
+async def test_an_expired_promise_is_dropped(harness, sessionmaker):
     """Ответ суточной давности пользователю уже не нужен, а таблица не должна
     расти вечно."""
     await harness.click("add", user_id=ADMIN)
@@ -178,7 +178,7 @@ async def test_просроченное_обещание_выбрасывает�
     assert await queued_messages(sessionmaker) == []
 
 
-async def test_нечитаемое_обещание_не_застревает(harness, sessionmaker):
+async def test_an_unreadable_promise_does_not_get_stuck(harness, sessionmaker):
     """Строка, которую нечем отправить (формат payload разошёлся с кодом),
     удаляется, а не блокирует очередь навсегда."""
     await harness.click("add", user_id=ADMIN)
@@ -197,7 +197,7 @@ async def test_нечитаемое_обещание_не_застревает(h
     assert await queued_messages(sessionmaker) == []
 
 
-async def test_провал_выгрузки_виден_пользователю(harness, session):
+async def test_a_failed_export_is_visible_to_the_user(harness, session):
     """Документ не персистентен: не ушёл — значит потерян навсегда, и сказать
     об этом надо сообщением, а не через обработчик ошибок.
 
@@ -223,7 +223,9 @@ async def test_провал_выгрузки_виден_пользователю
     )
 
 
-async def test_сбой_уборки_не_превращает_успех_в_ошибку(harness, sessionmaker, monkeypatch):
+async def test_a_cleanup_failure_does_not_turn_success_into_an_error(
+    harness, sessionmaker, monkeypatch
+):
     """`_settle` — обслуживание после отправки. Его провал не имеет права
     дослать «Попробуйте ещё раз» вслед за «Ученик добавлен»: преподаватель
     введёт данные заново, и операция задвоится.
@@ -245,7 +247,7 @@ async def test_сбой_уборки_не_превращает_успех_в_о�
     assert not any("Не получилось" in t for t in texts), "уборка не должна пугать пользователя"
 
 
-async def test_сорванная_подсказка_не_оставляет_невидимый_диалог(harness, session, sessionmaker):
+async def test_a_failed_prompt_leaves_no_invisible_dialog(harness, session, sessionmaker):
     """Состояние диалога коммитится, а подсказка о нём — обычная правка экрана.
 
     Не доставилась правка — диалог оставался открытым и невидимым: человек
@@ -267,7 +269,7 @@ async def test_сорванная_подсказка_не_оставляет_н�
     assert any("Введите сумму оплаты" in t for t in sent), "открытый диалог обязан быть виден"
 
 
-async def test_сорванная_правка_не_выдаётся_за_ошибку_операции(harness, session, sessionmaker):
+async def test_a_failed_edit_is_not_reported_as_an_operation_error(harness, session, sessionmaker):
     """Списание применено; сорванная правка карточки — не повод пугать.
 
     Раньше провал правки поднимался наверх, и поверх успешного «Урок списан»
@@ -291,7 +293,7 @@ async def test_сорванная_правка_не_выдаётся_за_оши
     assert not any("Попробуйте ещё раз" in t for t in everything), "операция удалась, пугать нечем"
 
 
-async def test_списание_имеет_персистентное_подтверждение(harness, session, sessionmaker):
+async def test_a_charge_has_a_durable_confirmation(harness, session, sessionmaker):
     """Смерть процесса между коммитом и отправкой не должна оставлять урок
     списанным без единого следа в чате: иначе преподаватель спишет второй раз.
 
@@ -320,7 +322,7 @@ async def test_списание_имеет_персистентное_подтв
     assert await student_balances(sessionmaker) == [("Аня", -1)], "дожимается ответ, а не операция"
 
 
-async def test_подсказка_диалога_не_попадает_в_очередь(harness, session, sessionmaker):
+async def test_a_dialog_prompt_does_not_enter_the_queue(harness, session, sessionmaker):
     """Текст подсказки осмысленен только сейчас: доставленный через минуту, он
     приходит в чат, где диалога уже нет."""
     students = StudentService(session)
@@ -335,7 +337,7 @@ async def test_подсказка_диалога_не_попадает_в_оче
     assert await queued_messages(sessionmaker) == [], "подсказку повторять нельзя"
 
 
-async def test_сорванная_reply_подсказка_закрывает_диалог(harness, session, sessionmaker):
+async def test_a_failed_reply_prompt_closes_the_dialog(harness, session, sessionmaker):
     """Невидимый диалог на reply-пути: состояние Flow.new_price коммитится, а
     подсказка «Теперь введите стоимость» — обычная отправка без запасного
     варианта. Не ушла — человек не видит ничего, решает что нажатие не прошло,
@@ -353,7 +355,7 @@ async def test_сорванная_reply_подсказка_закрывает_д
     assert await student_balances(sessionmaker) == [], "число не должно стать ценой урока"
 
 
-async def test_fallback_правки_переписывает_prompt_id(harness, session, sessionmaker):
+async def test_an_edit_fallback_rewrites_the_prompt_id(harness, session, sessionmaker):
     """Правка-подсказка ушла запасным СООБЩЕНИЕМ — у подсказки новый id.
 
     Без переписывания prompt_id следующий шаг диалога удалял бы карточку под
@@ -380,7 +382,7 @@ async def test_fallback_правки_переписывает_prompt_id(harness,
     assert await student_balances(sessionmaker) == [("Аня", 1)], "оплата должна пройти"
 
 
-async def test_поздний_prompt_id_не_воскрешает_закрытый_диалог(harness, sessionmaker):
+async def test_a_late_prompt_id_does_not_revive_a_closed_dialog(harness, sessionmaker):
     """prompt_id пишется после круга сети, и быстрый следующий апдейт успевает
     завершить диалог раньше. Дописать id в закрытый диалог значило бы
     воскресить пустую строку мусором {"prompt_id": …} — и она жила бы вечно.
@@ -413,7 +415,7 @@ async def test_поздний_prompt_id_не_воскрешает_закрыты
     assert fsm_rows == [], f"мусорная строка FSM: {[(r.key, r.state, r.data) for r in fsm_rows]}"
 
 
-async def test_clear_удаляет_строку_fsm(harness, sessionmaker):
+async def test_clear_deletes_the_fsm_row(harness, sessionmaker):
     """clear() раньше только обнулял поля: каждый открывавший диалог носил
     пустую строку вечно, и её читали на каждом апдейте оба хранилища."""
     await harness.click("add", user_id=ADMIN)  # открыли диалог — строка есть
@@ -427,7 +429,7 @@ async def test_clear_удаляет_строку_fsm(harness, sessionmaker):
     assert rows == [], f"после clear() строка должна исчезнуть: {[(r.key, r.state) for r in rows]}"
 
 
-async def test_сбой_дозаписи_не_зацикливает_дубли(harness, sessionmaker, monkeypatch):
+async def test_a_failed_settle_does_not_loop_duplicates(harness, sessionmaker, monkeypatch):
     """Пачка разослана, а записать её судьбу не вышло (внешний писатель держит
     базу, полный диск). Раньше цикл проглатывал исключение и через пять секунд
     слал ту же пачку снова — «Оплата внесена» приходила бы человеку каждые
@@ -470,7 +472,7 @@ async def _engine_of(sessionmaker):
     return sessionmaker.kw["bind"]
 
 
-async def test_пустой_тик_поллера_не_трогает_блокировку_записи(harness, sessionmaker, container):
+async def test_an_empty_poller_tick_does_not_touch_the_write_lock(harness, sessionmaker, container):
     """Штатное состояние очереди — пустая, и узнавать это надо бесплатно.
 
     Раньше каждый тик открывал BEGIN IMMEDIATE под общим замком — 17 тысяч
@@ -500,7 +502,7 @@ def _bad_request(text: str) -> TelegramBadRequest:
     return TelegramBadRequest(method=GetMe(), message=text)
 
 
-async def test_not_modified_это_успех_а_не_повод_для_fallback(harness, session, sessionmaker):
+async def test_not_modified_is_success_not_a_reason_for_fallback(harness, session, sessionmaker):
     """Типизированное исключение, а не RuntimeError: до сих пор все сбои в
     тестах были голыми исключениями, и ветки on_error в _send не исполнялись
     ни разу. «message is not modified» — повторный тап той же кнопки: экран
@@ -527,7 +529,7 @@ async def test_not_modified_это_успех_а_не_повод_для_fallback
     )
 
 
-async def test_retry_after_переносит_попытку_на_срок_телеграма(harness, sessionmaker):
+async def test_retry_after_reschedules_the_attempt_to_telegrams_deadline(harness, sessionmaker):
     """429 несёт срок в себе: очередь обязана уважать retry_after, а не свой
     экспоненциальный backoff."""
     await harness.click("add", user_id=ADMIN)
@@ -551,7 +553,7 @@ async def test_retry_after_переносит_попытку_на_срок_те�
     )
 
 
-async def test_подсказка_не_остаётся_висеть_при_быстром_следующем_шаге(harness, sessionmaker):
+async def test_a_prompt_does_not_linger_when_the_next_step_is_fast(harness, sessionmaker):
     """Гонка `_settle` с быстрым следующим сообщением — с проверкой ЦЕЛЕЙ
     удаления, а не только состояния FSM.
 
