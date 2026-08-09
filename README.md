@@ -65,33 +65,35 @@ Python, **aiogram 3** + SQLAlchemy, long polling. Мультитенантный
 ## Структура
 
 ```
-bot/
-├─ __main__.py     — точка входа (long polling, обработка ошибок)
-├─ config.py       — токен/БД/прокси из окружения
-├─ db.py           — движок и сессии SQLAlchemy
-├─ di.py           — контейнер dishka: область запроса, сервисы, буфер ответов
-├─ models.py       — Student, Operation, FsmRecord, ProcessedUpdate, OutboxMessage
-├─ services/       — бизнес-логика (оплата, списание, отмена, история…)
-├─ access.py       — белый список и одноразовые инвайты
-├─ admin.py        — команды /invite, /allow, /access
-├─ views.py        — экраны (меню, карточка, история, поиск)
-├─ keyboards.py    — inline-клавиатуры и схема callback data
-├─ render.py       — тексты, статусы, форматирование (МСК)
-├─ money.py        — деньги в копейках: разбор/формат/лимит
-├─ csv_export.py, export_data.py — выгрузка в CSV/Excel
-├─ middlewares.py  — единица работы (замок, commit, слив ответов), контроль доступа
-├─ ui.py           — буфер исходящих вызовов Telegram
-├─ outbox.py       — фоновая дожимка недоставленных ответов
-├─ storage.py      — FSM-хранилище поверх сессии запроса
-├─ states.py       — FSM-состояния
-├─ watchdog.py     — heartbeat супервизору
-└─ handlers/       — команды, ввод, вся навигация по кнопкам
-migrations/        — alembic: схема и её история
-docs/              — ТЗ и ARCHITECTURE.md (решения L1…L12)
-tests/             — pytest: бизнес-логика и настоящий диспетчер
+lesson_tracker/
+├─ __main__.py       — точка входа: long polling, сборка диспетчера, надзор за задачами
+├─ di.py             — контейнер dishka: область запроса, сервисы, буфер ответов
+├─ config.py         — токен/БД/прокси из окружения
+├─ timeutils.py      — единые часы (now_ts)
+├─ bot/              — всё, что знает про aiogram
+│  ├─ ui.py          — буфер исходящих вызовов Telegram (Responder)
+│  ├─ _outgoing.py   — типы очереди исходящих
+│  ├─ views.py       — экраны (меню, карточка, история, поиск)
+│  ├─ keyboards.py   — inline-клавиатуры и схема callback data
+│  ├─ render.py      — тексты, статусы, форматирование (МСК)
+│  ├─ storage.py     — FSM-хранилище поверх сессии запроса
+│  ├─ states.py      — FSM-состояния
+│  ├─ csv_export.py, export_data.py — выгрузка в CSV/Excel
+│  ├─ middlewares/   — единица работы, контроль доступа, FSM, сброс ввода
+│  └─ handlers/      — команды, ввод, навигация по кнопкам (+ admin.py)
+├─ db/               — движок, модели, границы хранилища
+├─ domain/           — деньги, доменные константы, результаты операций
+├─ services/         — бизнес-логика (оплата, списание, отмена, история, доступ)
+└─ runtime/          — фоновые петли: outbox.py, watchdog.py
+migrations/          — alembic: схема и её история
+docs/                — ТЗ и ARCHITECTURE.md (решения L1…L13)
+tests/               — pytest: бизнес-логика и настоящий диспетчер (+ helpers/)
 ```
 
-Код лежит в `src/lesson_tracker/` (src-раскладка).
+Код лежит в `src/lesson_tracker/` (src-раскладка). Правило корня пакета: там
+только то, у чего есть одно правило присутствия — точка входа, сборка, настройки
+и часы. Всё остальное живёт в слое. В `runtime/` попадает модуль, который
+импортирует единственно `__main__.py` и который `__main__` запускает.
 
 ## Запуск
 
