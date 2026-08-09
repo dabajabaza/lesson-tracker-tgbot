@@ -38,8 +38,9 @@ from dishka import AsyncContainer
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from . import access
-from .models import OutboxMessage, ProcessedUpdate
+from lesson_tracker.db.models import OutboxMessage, ProcessedUpdate
+from lesson_tracker.services import access
+
 from .storage import SqlAlchemyStorage
 from .ui import Responder
 

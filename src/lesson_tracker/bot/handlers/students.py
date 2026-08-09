@@ -8,13 +8,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from dishka import FromDishka
 
-from ..keyboards import cancel_kb, card_kb
-from ..money import format_money, parse_money_strict
-from ..render import render_card
-from ..services import StudentService, ViewPrefService
-from ..states import Flow
-from ..ui import Responder
-from ..views import card_view, search_results_view
+from lesson_tracker.bot.keyboards import cancel_kb, card_kb
+from lesson_tracker.bot.render import render_card
+from lesson_tracker.bot.states import Flow
+from lesson_tracker.bot.ui import Responder
+from lesson_tracker.bot.views import card_view, search_results_view
+from lesson_tracker.domain.money import format_money, parse_money_strict
+from lesson_tracker.services import StudentService, ViewPrefService
+
 from ._common import as_int, menu, money_error, owner, screen_of, target_of
 
 MAX_NAME_LEN = 80

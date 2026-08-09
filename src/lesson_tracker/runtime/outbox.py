@@ -22,8 +22,8 @@ from aiogram.methods import SendMessage, TelegramMethod
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from .db import READONLY
-from .models import OutboxMessage, ProcessedUpdate, now_ts
+from lesson_tracker.db.engine import READONLY
+from lesson_tracker.db.models import OutboxMessage, ProcessedUpdate, now_ts
 
 log = logging.getLogger(__name__)
 

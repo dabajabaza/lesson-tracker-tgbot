@@ -22,11 +22,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from lesson_tracker.__main__ import build_dispatcher
-from lesson_tracker.admin import router as admin_router
+from lesson_tracker.bot.handlers import router as main_router
+from lesson_tracker.bot.handlers.admin import router as admin_router
 from lesson_tracker.config import Config
-from lesson_tracker.db import create_db
+from lesson_tracker.db.engine import create_db
 from lesson_tracker.di import build_container
-from lesson_tracker.handlers import router as main_router
 from lesson_tracker.services import HistoryService, PaymentService, StudentService, ViewPrefService
 from tests.bot_harness import FAKE_BOT_TOKEN, BotHarness, RecordingSession
 from tests.schema import apply_migrations

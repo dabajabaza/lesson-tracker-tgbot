@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Student
+from lesson_tracker.db.models import Student
+
 from ._operations import record_operation
 
 # Стоимость занятия строго положительна. Инвариант держался только в

@@ -7,10 +7,10 @@
 
 from aiogram.types import CallbackQuery, Message
 
-from ..models import fits_in_db
-from ..money import MAX_MONEY, format_money
-from ..services import StudentService, ViewPrefService
-from ..views import main_menu_view
+from lesson_tracker.bot.views import main_menu_view
+from lesson_tracker.db.models import fits_in_db
+from lesson_tracker.domain.money import MAX_MONEY, format_money
+from lesson_tracker.services import StudentService, ViewPrefService
 
 
 def as_int(value) -> int | None:

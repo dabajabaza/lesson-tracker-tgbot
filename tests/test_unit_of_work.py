@@ -10,8 +10,8 @@ import pytest
 from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lesson_tracker.models import FsmRecord, Student
-from lesson_tracker.storage import ReadOnlyFsmView, SqlAlchemyStorage, _key
+from lesson_tracker.bot.storage import ReadOnlyFsmView, SqlAlchemyStorage, _key
+from lesson_tracker.db.models import FsmRecord, Student
 from tests.reading import fsm_state, student_names
 
 KEY = StorageKey(bot_id=1, chat_id=42, user_id=42)

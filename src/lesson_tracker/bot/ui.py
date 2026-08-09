@@ -33,7 +33,7 @@ from aiogram.methods import (
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import OutboxMessage, now_ts
+from lesson_tracker.db.models import OutboxMessage, now_ts
 
 log = logging.getLogger(__name__)
 

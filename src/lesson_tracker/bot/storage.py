@@ -34,7 +34,7 @@ from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import FsmRecord
+from lesson_tracker.db.models import FsmRecord
 
 
 def _key(key: StorageKey) -> str:

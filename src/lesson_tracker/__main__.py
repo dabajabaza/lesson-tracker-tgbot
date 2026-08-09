@@ -24,19 +24,19 @@ from dishka import AsyncContainer
 from dishka.integrations.aiogram import ContainerMiddleware, inject_router
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from .admin import router as admin_router
-from .config import ROOT, Config, load_config
-from .di import build_container
-from .handlers import router
-from .middlewares import (
+from .bot.handlers import router
+from .bot.handlers.admin import router as admin_router
+from .bot.middlewares import (
     AccessGateMiddleware,
     AccessMiddleware,
     DbSessionMiddleware,
     FsmSessionMiddleware,
 )
-from .outbox import run_sender
-from .storage import ReadOnlyFsmView
-from .watchdog import run_watchdog, sd_notify
+from .bot.storage import ReadOnlyFsmView
+from .config import ROOT, Config, load_config
+from .di import build_container
+from .runtime.outbox import run_sender
+from .runtime.watchdog import run_watchdog, sd_notify
 
 _ERROR_TEXT = "⚠️ Не получилось выполнить действие. Попробуйте ещё раз."
 

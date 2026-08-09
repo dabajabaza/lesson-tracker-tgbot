@@ -5,9 +5,10 @@ Self-hosted, в отличие от serverless, умеет отправлять 
 
 from io import BytesIO
 
+from lesson_tracker.db.models import Operation, Student
+from lesson_tracker.domain.money import to_rubles
+
 from .csv_export import guard_formula
-from .models import Operation, Student
-from .money import to_rubles
 from .render import OP_LABELS, format_datetime
 
 STUDENT_HEADERS = [

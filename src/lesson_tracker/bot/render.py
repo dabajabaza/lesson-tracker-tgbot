@@ -2,8 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
-from .models import Operation, Student
-from .money import format_money
+from lesson_tracker.db.models import Operation, Student
+from lesson_tracker.domain.money import format_money
 
 # Часовой пояс отображения: Москва (UTC+3).
 MSK = timezone(timedelta(hours=3))

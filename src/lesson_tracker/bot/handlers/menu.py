@@ -7,10 +7,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from dishka import FromDishka
 
-from ..keyboards import sort_menu_kb
-from ..services import StudentService, ViewPrefService
-from ..ui import Responder
-from ..views import main_menu_view
+from lesson_tracker.bot.keyboards import sort_menu_kb
+from lesson_tracker.bot.ui import Responder
+from lesson_tracker.bot.views import main_menu_view
+from lesson_tracker.services import StudentService, ViewPrefService
+
 from ._common import as_int, menu, owner, parts_of, screen_of, show_menu
 
 router = Router()

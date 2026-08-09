@@ -2,7 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import UiPref
+from lesson_tracker.db.models import UiPref
 
 DEFAULT_SORT = "name"
 DEFAULT_PAGE = 0

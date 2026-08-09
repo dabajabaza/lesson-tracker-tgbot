@@ -14,7 +14,10 @@ from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
-from lesson_tracker.models import Base, Student  # импорт регистрирует все таблицы на Base.metadata
+from lesson_tracker.db.models import (  # импорт регистрирует все таблицы на Base.metadata
+    Base,
+    Student,
+)
 from tests.schema import PROJECT_ROOT, apply_migrations
 
 

@@ -5,11 +5,12 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery
 from dishka import FromDishka
 
-from ..keyboards import undo_confirm_kb
-from ..render import describe_operation
-from ..services import HistoryService, StudentService, ViewPrefService
-from ..ui import Responder
-from ..views import card_view, history_view
+from lesson_tracker.bot.keyboards import undo_confirm_kb
+from lesson_tracker.bot.render import describe_operation
+from lesson_tracker.bot.ui import Responder
+from lesson_tracker.bot.views import card_view, history_view
+from lesson_tracker.services import HistoryService, StudentService, ViewPrefService
+
 from ._common import as_int, paged_target_of, parts_of, screen_of, show_menu
 
 router = Router()

@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Operation
+from lesson_tracker.db.models import Operation
+
 from .students import StudentService
 
 

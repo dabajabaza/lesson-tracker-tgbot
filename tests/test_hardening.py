@@ -11,9 +11,9 @@ import io
 import openpyxl
 from sqlalchemy import select
 
-from lesson_tracker.export_data import rows_to_xlsx
-from lesson_tracker.handlers._common import as_int
-from lesson_tracker.models import AllowedUser, Student
+from lesson_tracker.bot.export_data import rows_to_xlsx
+from lesson_tracker.bot.handlers._common import as_int
+from lesson_tracker.db.models import AllowedUser, Student
 from lesson_tracker.services import PaymentService, StudentService
 from tests.bot_harness import make_update_callback
 
@@ -95,7 +95,7 @@ async def test_гигантский_поисковый_запрос_не_про�
 def test_карточка_переживает_null_поля_последней_оплаты():
     """База пришла живой из serverless (L1): строка с датой оплаты, но
     NULL-суммой — не гипотеза. format_money(None) ронял карточку навсегда."""
-    from lesson_tracker.render import render_card
+    from lesson_tracker.bot.render import render_card
 
     class S:
         name = "Аня"
@@ -114,7 +114,7 @@ def test_карточка_переживает_null_поля_последней_
 def test_история_переживает_снимок_без_цены():
     """snapshot_before — нетипизированный JSON из serverless; отсутствие ключа
     price роняло всю «Историю» ученика навсегда."""
-    from lesson_tracker.render import render_operation
+    from lesson_tracker.bot.render import render_operation
 
     class Op:
         type = "price_change"
