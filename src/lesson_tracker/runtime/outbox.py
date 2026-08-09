@@ -23,7 +23,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lesson_tracker.db.engine import READONLY
-from lesson_tracker.db.models import OutboxMessage, ProcessedUpdate, now_ts
+from lesson_tracker.db.models import OutboxMessage, ProcessedUpdate
+from lesson_tracker.timeutils import now_ts
 
 log = logging.getLogger(__name__)
 

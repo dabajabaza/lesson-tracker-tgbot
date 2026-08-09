@@ -10,15 +10,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lesson_tracker.db.models import Student
+from lesson_tracker.domain.constants import MIN_PRICE
 
 from ._operations import record_operation
-
-# Стоимость занятия строго положительна. Инвариант держался только в
-# обработчиках (parse_money_strict возвращает error="zero"), а делит на неё
-# PaymentService — и на строке с price=0 оплата падала бы ZeroDivisionError.
-# Боевая база приехала из serverless-версии (L1), так что унаследованная или
-# правленая руками строка — не выдумка.
-MIN_PRICE = 1
 
 
 class StudentService:

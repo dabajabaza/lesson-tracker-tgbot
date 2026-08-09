@@ -8,7 +8,7 @@
 from aiogram.types import CallbackQuery, Message
 
 from lesson_tracker.bot.views import main_menu_view
-from lesson_tracker.db.models import fits_in_db
+from lesson_tracker.db.limits import fits_in_db
 from lesson_tracker.domain.money import MAX_MONEY, format_money
 from lesson_tracker.services import StudentService, ViewPrefService
 

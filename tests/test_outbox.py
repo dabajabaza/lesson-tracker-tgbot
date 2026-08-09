@@ -17,9 +17,10 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods import GetMe
 from sqlalchemy import select
 
-from lesson_tracker.db.models import FsmRecord, OutboxMessage, now_ts
+from lesson_tracker.db.models import FsmRecord, OutboxMessage
 from lesson_tracker.runtime import outbox
 from lesson_tracker.services import StudentService
+from lesson_tracker.timeutils import now_ts
 from tests.bot_harness import make_update_callback
 from tests.reading import fsm_state, queued_messages, student_balances, student_prices
 

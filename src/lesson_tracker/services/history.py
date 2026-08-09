@@ -1,19 +1,12 @@
 """История операций и отмена последнего действия."""
 
-from dataclasses import dataclass
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lesson_tracker.db.models import Operation
+from lesson_tracker.domain.values import UndoResult
 
 from .students import StudentService
-
-
-@dataclass
-class UndoResult:
-    status: str  # 'empty' | 'stale' | 'done'
-    op: Operation | None = None
 
 
 class HistoryService:
