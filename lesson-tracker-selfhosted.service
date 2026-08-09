@@ -32,7 +32,7 @@ StartLimitBurst=60
 Type=notify
 WatchdogSec=90
 WorkingDirectory=%h/Projects/lesson-tracker-tgbot
-ExecStart=%h/Projects/lesson-tracker-tgbot/.venv/bin/python -m bot
+ExecStart=%h/Projects/lesson-tracker-tgbot/.venv/bin/python -m lesson_tracker
 # Прямой доступ к api.telegram.org в этой сети режется — ходим через прокси.
 Environment=TELEGRAM_PROXY=http://127.0.0.1:1080
 # ADMIN_IDS намеренно НЕ задан здесь. Пустое значение не лучше отсутствующего

@@ -9,8 +9,8 @@
 
 from aiogram.fsm.storage.base import StorageKey
 
-from bot.services import StudentService
-from bot.storage import SqlAlchemyStorage
+from lesson_tracker.services import StudentService
+from lesson_tracker.storage import SqlAlchemyStorage
 from tests.reading import last_callback_answer, last_edit
 
 A, B = 111, 222  # два преподавателя; оба в TEST_ADMIN_IDS (см. conftest)

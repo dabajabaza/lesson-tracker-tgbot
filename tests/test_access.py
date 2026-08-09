@@ -3,8 +3,8 @@
 настоящими миграциями (см. L8). Не in-memory — файл нужен и для копирования
 шаблона, и для проб вторым соединением."""
 
-from bot import access
-from bot.models import AllowedUser, Invite, now_ts
+from lesson_tracker import access
+from lesson_tracker.models import AllowedUser, Invite, now_ts
 
 ADMIN = frozenset({111})
 STRANGER = 999

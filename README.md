@@ -91,9 +91,7 @@ docs/              — ТЗ и ARCHITECTURE.md (решения L1…L12)
 tests/             — pytest: бизнес-логика и настоящий диспетчер
 ```
 
-Код лежит в `src/bot/` (src-раскладка); пакет намеренно называется `bot`, а не
-`lesson_tracker` — на сервере rc.d запускает `python -m bot`, и переименование
-пакета делается только вместе с правкой rc.d.
+Код лежит в `src/lesson_tracker/` (src-раскладка).
 
 ## Запуск
 
@@ -104,7 +102,7 @@ tests/             — pytest: бизнес-логика и настоящий �
 uv sync
 
 # токен — в переменной BOT_TOKEN или в файле .bot-token в корне репозитория
-uv run python -m bot
+uv run python -m lesson_tracker
 ```
 
 Миграции применяются автоматически при старте (`alembic upgrade head`).
@@ -113,7 +111,7 @@ uv run python -m bot
 локальный прокси (для прокси aiogram требует пакет `aiohttp-socks`, он в requirements):
 
 ```bash
-TELEGRAM_PROXY=http://127.0.0.1:1080 python -m bot
+TELEGRAM_PROXY=http://127.0.0.1:1080 python -m lesson_tracker
 ```
 
 Переменные окружения: `BOT_TOKEN`, `DATABASE_URL` (по умолчанию `data.sqlite` в корне

@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-# Корень репозитория: src/bot/config.py -> parents[2]. От него отсчитываются
+# Корень репозитория: src/lesson_tracker/config.py -> parents[2]. От него отсчитываются
 # alembic.ini, .bot-token и data.sqlite по умолчанию. Держится на editable-
 # инсталле (пакет живёт в дереве исходников) — у нас он всюду: uv sync локально,
 # pip install -e . на сервере.

@@ -6,8 +6,8 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from bot.config import load_config
-from bot.models import Base  # импорт модуля регистрирует все модели на Base.metadata
+from lesson_tracker.config import load_config
+from lesson_tracker.models import Base  # импорт модуля регистрирует все модели на Base.metadata
 
 # Значение-заглушка из alembic.ini: означает «URL не задан».
 _ALEMBIC_INI_PLACEHOLDER = "driver://user:pass@localhost/dbname"
@@ -64,9 +64,9 @@ else:
         # disable_existing_loggers=False обязателен. По умолчанию fileConfig
         # НАВСЕГДА выключает все уже созданные логгеры — а миграции в проде
         # выполняются внутри процесса бота (см. __main__.main), после первого
-        # logging.basicConfig. Без флага bot.*, aiogram.* и watchdog замолкают
-        # на весь срок жизни процесса, и второй basicConfig этого не чинит:
-        # отказы доступа, «апдейт уже применён», сбои доставки и предупреждения
+        # logging.basicConfig. Без флага lesson_tracker.*, aiogram.* и watchdog
+        # замолкают на весь срок жизни процесса, и второй basicConfig этого не
+        # чинит: отказы доступа, «апдейт уже применён», сбои доставки и предупреждения
         # сторожа просто исчезают из журнала. В тестах ветка не выполняется
         # (там передаётся готовое соединение), поэтому дефект жил незамеченным.
         fileConfig(config.config_file_name, disable_existing_loggers=False)
