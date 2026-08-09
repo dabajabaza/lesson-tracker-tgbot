@@ -10,12 +10,18 @@ if/elif, теперь — отдельный роутер в хвосте.
 
 Между ними порядок безразличен: обработчики различаются по префиксу
 callback_data и по состоянию FSM, пересечений нет.
+
+`admin` лежит в этом каталоге, но в список НЕ входит намеренно: он
+подключается отдельным роутером и ПЕРВЫМ в build_dispatcher, потому что его
+команды обязаны прерывать начатый диалог. Дописав его сюда «для полноты», вы
+поставите его вторым — и /invite съест catch-all главного роутера.
 """
 
 from aiogram import Router
 
+from lesson_tracker.bot.middlewares import ClearStateOnCallbackMiddleware
+
 from . import export, fallback, history, menu, payments, students
-from ._state import ClearStateOnCallbackMiddleware
 
 router = Router()
 
