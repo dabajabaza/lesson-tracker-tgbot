@@ -9,9 +9,9 @@ import asyncio
 
 from sqlalchemy import select
 
-from bot import access
-from bot.models import FsmRecord, Operation, Student
-from bot.services import StudentService
+from lesson_tracker import access
+from lesson_tracker.models import FsmRecord, Operation, Student
+from lesson_tracker.services import StudentService
 from tests.bot_harness import make_update_message
 from tests.reading import last_callback_answer, student_names
 

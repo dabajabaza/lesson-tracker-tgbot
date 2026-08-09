@@ -10,7 +10,7 @@
 
 from sqlalchemy import select
 
-from bot.models import FsmRecord, OutboxMessage, ProcessedUpdate, Student
+from lesson_tracker.models import FsmRecord, OutboxMessage, ProcessedUpdate, Student
 
 
 async def student_prices(sessionmaker) -> list[tuple[str, int]]:

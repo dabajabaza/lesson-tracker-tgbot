@@ -43,7 +43,7 @@ async def test_диалог_переживает_пересборку_диспе
     # «Рестарт»: новый диспетчер поверх той же базы. Роутеры объявлены
     # синглтонами модуля и Router живёт с одним родителем, поэтому перед
     # пересборкой их надо отцепить — как это делает фикстура между тестами.
-    from bot.__main__ import build_dispatcher
+    from lesson_tracker.__main__ import build_dispatcher
     from tests.conftest import _SHARED_ROUTERS, TEST_ADMIN_IDS
 
     await harness.dp.emit_shutdown()

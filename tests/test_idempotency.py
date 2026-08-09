@@ -13,9 +13,9 @@ Telegram подтверждает апдейт только следующим �
 
 from unittest.mock import patch
 
-from bot import access
-from bot.models import ProcessedUpdate
-from bot.services import StudentService
+from lesson_tracker import access
+from lesson_tracker.models import ProcessedUpdate
+from lesson_tracker.services import StudentService
 from tests.bot_harness import make_update_message
 from tests.reading import processed_update_ids, student_prices
 from tests.test_concurrency import _write_lock_free
@@ -98,7 +98,7 @@ async def test_старые_отметки_вычищаются(harness, session
     """Иначе таблица растёт вечно. TTL — неделя при суточном хранении у
     Telegram, с запасом. Уборка живёт у фонового отправщика, на его часе, —
     а не на пути апдейта."""
-    from bot import outbox
+    from lesson_tracker import outbox
 
     async with sessionmaker() as s:
         s.add(ProcessedUpdate(update_id=1, created_at=1))  # 1970 год
@@ -164,7 +164,7 @@ async def test_повтор_не_оставляет_открытой_транз�
     await harness.dp.feed_update(harness.bot, update)
 
     freed: list[bool] = []
-    import bot.middlewares as mw
+    import lesson_tracker.middlewares as mw
 
     original = mw.DbSessionMiddleware._run
 
