@@ -61,5 +61,13 @@ jobs:
           uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
           git diff --exit-code -- requirements.txt
 
+      # На FreeBSD PyPI не публикует wheels вовсе: всё, у чего нет
+      # универсального колеса, собирается из исходников, а pydantic-core
+      # требует Rust, которого в jail нет. Такие пакеты приходят из портов
+      # py312-*, и pip берёт их вместо сборки, только если версия совпала
+      # точно. Без этой проверки обновление лока падает посреди деплоя.
+      - name: Пины сходятся с портами FreeBSD
+        run: python3 scripts/check-freebsd-pins.py
+
       - name: Тесты
         run: uv run pytest -q

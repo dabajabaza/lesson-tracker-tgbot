@@ -20,6 +20,26 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3",
 ]
 
+# Versions pinned to what the FreeBSD ports tree ships, for every package that
+# has no pure-python wheel. PyPI publishes no wheels for FreeBSD at all, so
+# those are built from source in the production jail — pydantic-core needs Rust
+# (1.27 GiB, not installed there) and the rest burn minutes of an old laptop's
+# CPU on every deploy. The jail installs them from py312-* ports instead, and
+# pip only skips the build when the version matches the port exactly.
+#
+# Constraints rather than dependencies: they steer resolution without becoming
+# requirements, so development on Linux is unaffected.
+#
+# Checked against the real ports index by scripts/check-freebsd-pins.py in CI.
+[tool.uv]
+constraint-dependencies = [
+    "aiohttp==3.14.1",        # py312-aiohttp
+    "greenlet==3.5.3",        # py312-greenlet
+    "markupsafe==3.0.3",      # py312-markupsafe
+    "openpyxl==3.1.5",        # py312-openpyxl
+    "pydantic-core==2.46.4",  # py312-pydantic-core
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.14",
