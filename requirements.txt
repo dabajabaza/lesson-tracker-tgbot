@@ -7,7 +7,7 @@ aiogram==3.30.0
     # via lesson-tracker
 aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.14.1
+aiohttp==3.14.3
     # via
     #   aiogram
     #   aiohttp-socks
@@ -33,7 +33,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-greenlet==3.5.3
+greenlet==3.5.5
     # via sqlalchemy
 idna==3.18
     # via yarl
@@ -53,9 +53,9 @@ propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
-pydantic==2.13.4
+pydantic==2.13.5
     # via aiogram
-pydantic-core==2.46.4
+pydantic-core==2.46.5
     # via pydantic
 python-socks==2.8.2
     # via aiohttp-socks

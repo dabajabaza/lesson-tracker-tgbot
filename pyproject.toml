@@ -33,11 +33,11 @@ dependencies = [
 # Checked against the real ports index by scripts/check-freebsd-pins.py in CI.
 [tool.uv]
 constraint-dependencies = [
-    "aiohttp==3.14.1",        # py312-aiohttp
-    "greenlet==3.5.3",        # py312-greenlet
+    "aiohttp==3.14.3",        # py312-aiohttp
+    "greenlet==3.5.5",        # py312-greenlet
     "markupsafe==3.0.3",      # py312-markupsafe
     "openpyxl==3.1.5",        # py312-openpyxl
-    "pydantic-core==2.46.4",  # py312-pydantic-core
+    "pydantic-core==2.46.5",  # py312-pydantic-core
 ]
 
 [dependency-groups]
