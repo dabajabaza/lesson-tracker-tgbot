@@ -27,7 +27,15 @@ import time
 import urllib.error
 import urllib.request
 
-PACKAGESITE = "https://pkg.freebsd.org/FreeBSD:15:amd64/latest/packagesite.pkg"
+# ABI and branch must mirror the jail exactly — `pkg config ABI` and the
+# FreeBSD-ports url in `pkg -vv` there. The branch is the half that is easy to
+# get wrong: pkg installs from `quarterly` by default, while `latest` runs
+# months ahead of it. Checking `latest` made this very check pass on
+# pydantic-core 2.46.5 while the jail could only offer 2.46.4, and v0.5.4 died
+# mid-deploy on "Rust not found" with a green CI behind it.
+PKG_ABI = "FreeBSD:15:amd64"
+PKG_BRANCH = "quarterly"
+PACKAGESITE = f"https://pkg.freebsd.org/{PKG_ABI}/{PKG_BRANCH}/packagesite.pkg"
 PYTHON_PKG_PREFIX = "py312-"
 REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([0-9A-Za-z.]+)")
 
